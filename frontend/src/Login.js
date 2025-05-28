@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+//import { useNavigate } from "react-router-dom";
 import { isWithinArea, polygonCoordinates } from "./utils/geoCheck";
 import { MapContainer, TileLayer, Polygon, Marker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -12,7 +12,7 @@ const Login = () => {
   const [location, setLocation] = useState(null);
   const [isInArea, setIsInArea] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
-  const navigate = useNavigate();
+  //const navigate = useNavigate();
 
   const userIcon = new L.Icon({
     iconUrl: "https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png",
@@ -77,19 +77,28 @@ const Login = () => {
       const data = await response.json();
 
       if (!response.ok) {
-        console.log("Respuesta completa del servidor:", data); // Agregar esto
-        throw new Error(data.error || `Error HTTP: ${response.status}`);
+        console.error("Error del servidor:", {
+          status: response.status,
+          statusText: response.statusText,
+          data: data,
+        });
+
+        throw new Error(
+          data.error ||
+            data.message ||
+            `Error del servidor: ${response.status} ${response.statusText}`
+        );
       }
 
       if (data.success) {
-        // Guardar datos de usuario en localStorage/sessionStorage si es necesario
         localStorage.setItem("user", JSON.stringify(data.user));
-        navigate("/home");
+        // Redirección a Moodle con token
+        window.location.href = data.redirect;
       } else {
         setError(data.error || "Usuario o contraseña incorrectos");
       }
     } catch (err) {
-      console.error("Error durante el login:", err);
+      console.error("Error completo durante el login:", err);
       setError(
         err.message.includes("Failed to fetch")
           ? "No se pudo conectar con el servidor. Intente nuevamente."
