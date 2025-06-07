@@ -5,6 +5,7 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const crypto = require("crypto");
 const { exec } = require("child_process");
+const { spawn } = require('child_process'); // Añade esto al inicio del archivo
 const path = require("path");
 
 const app = express();
@@ -43,24 +44,43 @@ const scriptPath = path.join(__dirname, "check_password.py");
 // Función para verificar contraseña Moodle
 function validatePasswordWithPython(password, storedHash, callback) {
   const scriptPath = path.join(__dirname, "check_password.py");
-  const command = `python ${scriptPath} "${password}" "${storedHash}"`;
+  
+  try {
+    const input = JSON.stringify({
+      password: password,
+      stored_hash: storedHash  // Nota: cambié a stored_hash para coincidir con Python
+    });
 
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error ejecutando script de Python: ${error}`);
-      callback(false);
-      return;
-    }
+    const pythonProcess = spawn('python3', [scriptPath]);
 
-    if (stderr) {
-      console.error(`Error en script de Python: ${stderr}`);
-      callback(false);
-      return;
-    }
+    let stdoutData = '';
+    let stderrData = '';
 
-    console.log(`Resultado del script de Python: ${stdout.trim()}`);
-    callback(stdout.trim() === "OK");
-  });
+    pythonProcess.stdout.on('data', (data) => {
+      stdoutData += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      stderrData += data.toString();
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`Python script exited with code ${code}. Error: ${stderrData}`);
+        return callback(false);
+      }
+
+      console.log(`Python script output: ${stdoutData.trim()}`);
+      callback(stdoutData.trim() === "OK");
+    });
+
+    pythonProcess.stdin.write(input);
+    pythonProcess.stdin.end();
+
+  } catch (err) {
+    console.error('Error spawning Python process:', err);
+    callback(false);
+  }
 }
 
 // Ruta de login mejorada
@@ -117,6 +137,8 @@ app.post("/login", async (req, res) => {
     }
 
     // Usar script Python para validar la contraseña
+    console.log("Password: " + password);
+    console.log("User Password: " + user.password);
     validatePasswordWithPython(password, user.password, async (isValid) => {
       if (isValid) {
         // 1. Generar token seguro
