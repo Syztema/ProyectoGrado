@@ -9,11 +9,11 @@ require('dotenv').config();
 
 // Configuración de la base de datos
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
+  host: process.env.DB_HOST || "193.203.175.121",
   port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'proyecto'
+  user: process.env.DB_USER || "u496942219_moodleud",
+  password: process.env.DB_PASSWORD || "z?0e>FTA",
+  database: process.env.DB_NAME || "u496942219_moodleud",
 };
 
 const rl = readline.createInterface({
