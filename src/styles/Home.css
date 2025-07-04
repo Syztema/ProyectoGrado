@@ -268,21 +268,45 @@
   line-height: 1.6;
 }
 
-.access-btn {
-  background: linear-gradient(135deg, #3b82f6, #9333ea);
-  color: white;
+/* Action buttons container */
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: center;
+}
+
+.access-btn, .config-btn {
   padding: 12px 24px;
   border-radius: 8px;
   font-weight: 600;
   border: none;
   cursor: pointer;
-  box-shadow: 0 10px 25px rgba(59, 130, 246, 0.3);
   transition: all 0.2s ease;
+  min-width: 200px;
+}
+
+.access-btn {
+  background: linear-gradient(135deg, #3b82f6, #9333ea);
+  color: white;
+  box-shadow: 0 10px 25px rgba(59, 130, 246, 0.3);
 }
 
 .access-btn:hover {
   background: linear-gradient(135deg, #2563eb, #7c3aed);
   box-shadow: 0 15px 35px rgba(59, 130, 246, 0.4);
+  transform: translateY(-2px);
+}
+
+.config-btn {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  box-shadow: 0 10px 25px rgba(16, 185, 129, 0.3);
+}
+
+.config-btn:hover {
+  background: linear-gradient(135deg, #059669, #047857);
+  box-shadow: 0 15px 35px rgba(16, 185, 129, 0.4);
   transform: translateY(-2px);
 }
 
@@ -416,6 +440,11 @@
   
   .main-content {
     padding: 2rem 1.5rem;
+  }
+  
+  .action-buttons {
+    flex-direction: row;
+    justify-content: center;
   }
 }
 

@@ -2,11 +2,13 @@
 import React from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import { useDeviceFingerprint } from '../hooks/useDeviceFingerprint';
+import { useNavigate } from 'react-router-dom'; // Agregar esta importación
 import '../styles/Home.css';
 
 const Home = () => {
   const { user, logout } = useAuthContext();
   const { fingerprint, deviceInfo } = useDeviceFingerprint();
+  const navigate = useNavigate(); // Agregar esta línea
 
   const handleLogout = async () => {
     try {
@@ -129,9 +131,14 @@ const Home = () => {
                   Tu dispositivo y ubicación han sido verificados exitosamente.
                   El sistema de seguridad multi-factor ha validado tu identidad.
                 </p>
-                <button className="access-btn">
-                  Acceder al Sistema
-                </button>
+                <div className="action-buttons">
+                  <button className="access-btn">
+                    Acceder al Sistema
+                  </button>
+                  <button className="config-btn" onClick={() => navigate('/admin')}>
+                    ⚙️ Configuración
+                  </button>
+                </div>
               </div>
             </div>
           </div>
