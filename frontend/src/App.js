@@ -4,6 +4,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuthContext } from './context/AuthContext';
 import Login from './pages/Login';
 import Home from './pages/Home';
+import Admin from './pages/Admin';
 import LoadingSpinner from './components/common/LoadingSpinner';
 
 // Componente para rutas protegidas
@@ -57,7 +58,7 @@ const AppRoutes = () => {
     <Routes>
       {/* Ruta raíz - redirigir basado en autenticación */}
       <Route path="/" element={<Navigate to="/home" replace />} />
-      
+      <Route path="/admin" element={<Admin />} />
       {/* Rutas públicas */}
       <Route 
         path="/login" 
