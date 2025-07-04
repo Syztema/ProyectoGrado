@@ -497,6 +497,482 @@ app.post('/api/auth/logout', (req, res) => {
   });
 });
 
+// ===== ADMIN API ROUTES =====
+// Agregar estas rutas DESPUÉS de las rutas de auth existentes en server.js
+
+// Middleware para verificar si el usuario es admin
+const requireAdmin = async (req, res, next) => {
+  
+  try {
+    // Verificar si el usuario tiene permisos de admin
+    const [rows] = await pool.execute(
+      'SELECT * FROM users WHERE username = ? AND is_active = TRUE',
+      ['admin@empresa.com']
+    );
+    
+    if (rows.length === 0) {
+      return res.status(403).json({ error: 'Usuario no encontrado' });
+    }
+    
+    const user = rows[0];
+    // Por ahora, cualquier usuario autenticado puede acceder a admin
+    req.adminUser = user;
+    next();
+  } catch (error) {
+    console.error('❌ Error verificando admin:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
+// ===== ESTADÍSTICAS =====
+app.get('/api/admin/stats', requireAdmin, async (req, res) => {
+  try {
+    console.log('📊 Solicitando estadísticas...');
+    
+    // Estadísticas de usuarios
+    const [userStats] = await pool.execute(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(CASE WHEN is_active = TRUE THEN 1 END) as active_users,
+        COUNT(CASE WHEN is_active = FALSE THEN 1 END) as inactive_users
+      FROM users
+    `);
+    
+    // Estadísticas de dispositivos
+    const [deviceStats] = await pool.execute(`
+      SELECT 
+        COUNT(*) as total_devices,
+        COUNT(CASE WHEN is_active = TRUE THEN 1 END) as active_devices,
+        COUNT(CASE WHEN auto_authorized = TRUE AND is_active = TRUE THEN 1 END) as auto_authorized,
+        COUNT(CASE WHEN manually_authorized = TRUE AND is_active = TRUE THEN 1 END) as manual_authorized,
+        COUNT(DISTINCT username) as unique_users_with_devices
+      FROM authorized_devices
+    `);
+    
+    // Logins recientes
+    const [recentLogins] = await pool.execute(`
+      SELECT COUNT(*) as recent_logins
+      FROM auth_logs 
+      WHERE success = TRUE 
+      AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+    `);
+    
+    // Calcular promedio de dispositivos por usuario
+    const avgDevices = deviceStats[0].unique_users_with_devices > 0 
+      ? (deviceStats[0].active_devices / deviceStats[0].unique_users_with_devices).toFixed(1)
+      : 0;
+    
+    const stats = {
+      totalUsers: userStats[0].total_users,
+      activeUsers: userStats[0].active_users,
+      inactiveUsers: userStats[0].inactive_users,
+      totalDevices: deviceStats[0].total_devices,
+      activeDevices: deviceStats[0].active_devices,
+      autoAuthorized: deviceStats[0].auto_authorized,
+      manualAuthorized: deviceStats[0].manual_authorized,
+      uniqueUsersWithDevices: deviceStats[0].unique_users_with_devices,
+      recentLogins: recentLogins[0].recent_logins,
+      avgDevices: parseFloat(avgDevices)
+    };
+    
+    console.log('✅ Estadísticas enviadas:', stats);
+    res.json(stats);
+  } catch (error) {
+    console.error('❌ Error obteniendo estadísticas:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ===== GESTIÓN DE USUARIOS =====
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    console.log('👥 Solicitando usuarios...');
+    
+    const [rows] = await pool.execute(`
+      SELECT 
+        u.id, u.username, u.email, u.full_name, u.is_active, u.created_at,
+        COUNT(ad.id) as device_count
+      FROM users u
+      LEFT JOIN authorized_devices ad ON u.username = ad.username AND ad.is_active = TRUE
+      GROUP BY u.id, u.username, u.email, u.full_name, u.is_active, u.created_at
+      ORDER BY u.created_at DESC
+    `);
+    
+    console.log(`✅ ${rows.length} usuarios encontrados`);
+    res.json(rows);
+  } catch (error) {
+    console.error('❌ Error listando usuarios:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ===== GESTIÓN DE DISPOSITIVOS =====
+app.get('/api/admin/devices', requireAdmin, async (req, res) => {
+  try {
+    console.log('📱 Solicitando dispositivos...');
+    
+    const [rows] = await pool.execute(`
+      SELECT 
+        id, fingerprint, username, user_display_name, 
+        device_info, created_at, last_seen, auto_authorized, 
+        manually_authorized, is_active, authorized_by, admin_notes
+      FROM authorized_devices 
+      ORDER BY last_seen DESC
+    `);
+    
+    // Parsear device_info JSON
+    const devices = rows.map(device => ({
+      ...device,
+      device_info: device.device_info ? JSON.parse(device.device_info) : {}
+    }));
+    
+    console.log(`✅ ${devices.length} dispositivos encontrados`);
+    res.json(devices);
+  } catch (error) {
+    console.error('❌ Error listando dispositivos:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Crear usuario
+app.post('/api/admin/users', requireAdmin, async (req, res) => {
+  const { username, password, full_name, email } = req.body;
+  
+  try {
+    console.log('➕ Creando usuario:', username);
+    
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Usuario y contraseña son requeridos' });
+    }
+    
+    // Verificar si el usuario ya existe
+    const [existing] = await pool.execute(
+      'SELECT id FROM users WHERE username = ?',
+      [username]
+    );
+    
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'El usuario ya existe' });
+    }
+    
+    // Encriptar contraseña
+    let hashedPassword;
+    try {
+      hashedPassword = await bcrypt.hash(password, 10);
+    } catch (error) {
+      console.warn('⚠️ Error con bcrypt, usando texto plano');
+      hashedPassword = password;
+    }
+    
+    // Crear usuario
+    const [result] = await pool.execute(`
+      INSERT INTO users (username, password, full_name, email, is_active, created_at)
+      VALUES (?, ?, ?, ?, TRUE, NOW())
+    `, [username, hashedPassword, full_name, email || username]);
+    
+    console.log('✅ Usuario creado con ID:', result.insertId);
+    res.json({
+      success: true,
+      userId: result.insertId,
+      message: 'Usuario creado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creando usuario:', error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'El usuario ya existe' });
+    } else {
+      res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  }
+});
+
+// Activar/Desactivar usuario
+app.post('/api/admin/users/:userId/toggle', requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    console.log('🔄 Cambiando estado del usuario:', userId);
+    
+    // Obtener estado actual
+    const [user] = await pool.execute(
+      'SELECT id, username, is_active FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    if (user.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    
+    const currentUser = user[0];
+    const newStatus = !currentUser.is_active;
+    
+    // Actualizar estado
+    await pool.execute(
+      'UPDATE users SET is_active = ? WHERE id = ?',
+      [newStatus, userId]
+    );
+    
+    // Si se desactiva el usuario, revocar sus dispositivos
+    if (!newStatus) {
+      await pool.execute(
+        'UPDATE authorized_devices SET is_active = FALSE WHERE username = ?',
+        [currentUser.username]
+      );
+    }
+    
+    console.log(`✅ Usuario ${currentUser.username} ${newStatus ? 'activado' : 'desactivado'}`);
+    res.json({
+      success: true,
+      message: `Usuario ${newStatus ? 'activado' : 'desactivado'} exitosamente`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error actualizando usuario:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Autorizar dispositivo manualmente
+app.post('/api/admin/devices/authorize', requireAdmin, async (req, res) => {
+  const { fingerprint, username, admin_notes } = req.body;
+  
+  try {
+    console.log('📱 Autorizando dispositivo para:', username);
+    
+    if (!fingerprint || !username) {
+      return res.status(400).json({ error: 'Fingerprint y username son requeridos' });
+    }
+    
+    // Verificar si ya existe
+    const [existing] = await pool.execute(
+      'SELECT id FROM authorized_devices WHERE fingerprint = ?',
+      [fingerprint]
+    );
+    
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'Este dispositivo ya está autorizado' });
+    }
+    
+    // Verificar que el usuario existe
+    const [user] = await pool.execute(
+      'SELECT username FROM users WHERE username = ? AND is_active = TRUE',
+      [username]
+    );
+    
+    if (user.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado o inactivo' });
+    }
+    
+    const deviceId = crypto.randomUUID();
+    
+    await pool.execute(`
+      INSERT INTO authorized_devices 
+      (id, fingerprint, username, authorized_by, admin_notes, manually_authorized, created_at, last_seen, is_active)
+      VALUES (?, ?, ?, ?, ?, TRUE, NOW(), NOW(), TRUE)
+    `, [deviceId, fingerprint, username, req.session.user.username, admin_notes]);
+    
+    console.log('✅ Dispositivo autorizado:', deviceId);
+    res.json({
+      success: true,
+      deviceId,
+      message: 'Dispositivo autorizado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error autorizando dispositivo:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Revocar dispositivo
+app.post('/api/admin/devices/:deviceId/revoke', requireAdmin, async (req, res) => {
+  const { deviceId } = req.params;
+  
+  try {
+    console.log('❌ Revocando dispositivo:', deviceId);
+    
+    // Verificar que el dispositivo existe
+    const [device] = await pool.execute(
+      'SELECT id, username FROM authorized_devices WHERE id = ?',
+      [deviceId]
+    );
+    
+    if (device.length === 0) {
+      return res.status(404).json({ error: 'Dispositivo no encontrado' });
+    }
+    
+    // Revocar dispositivo
+    await pool.execute(
+      'UPDATE authorized_devices SET is_active = FALSE WHERE id = ?',
+      [deviceId]
+    );
+    
+    console.log('✅ Dispositivo revocado');
+    res.json({
+      success: true,
+      message: 'Dispositivo revocado exitosamente'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error revocando dispositivo:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Limpiar dispositivos inactivos
+app.post('/api/admin/devices/cleanup', requireAdmin, async (req, res) => {
+  const { days = 90 } = req.body;
+  
+  try {
+    console.log(`🧹 Limpiando dispositivos inactivos por ${days} días`);
+    
+    // Encontrar dispositivos inactivos
+    const [inactiveDevices] = await pool.execute(`
+      SELECT id, username, fingerprint, last_seen
+      FROM authorized_devices 
+      WHERE is_active = TRUE 
+      AND (last_seen IS NULL OR last_seen < DATE_SUB(NOW(), INTERVAL ? DAY))
+    `, [days]);
+    
+    if (inactiveDevices.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No se encontraron dispositivos inactivos',
+        devicesRevoked: 0
+      });
+    }
+    
+    // Revocar dispositivos inactivos
+    const deviceIds = inactiveDevices.map(d => d.id);
+    await pool.execute(
+      `UPDATE authorized_devices SET is_active = FALSE WHERE id IN (${deviceIds.map(() => '?').join(',')})`,
+      deviceIds
+    );
+    
+    console.log(`✅ ${inactiveDevices.length} dispositivos revocados`);
+    res.json({
+      success: true,
+      message: `Se revocaron ${inactiveDevices.length} dispositivos inactivos`,
+      devicesRevoked: inactiveDevices.length,
+      devices: inactiveDevices
+    });
+    
+  } catch (error) {
+    console.error('❌ Error limpiando dispositivos:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ===== LOGS DE AUDITORÍA =====
+app.get('/api/admin/logs', requireAdmin, async (req, res) => {
+  const { page = 1, limit = 50, username, success } = req.query;
+  const offset = (page - 1) * limit;
+  
+  try {
+    console.log('📋 Solicitando logs, página:', page);
+    
+    let whereClause = '';
+    const params = [];
+    
+    if (username) {
+      whereClause += ' WHERE username LIKE ?';
+      params.push(`%${username}%`);
+    }
+    
+    if (success !== undefined) {
+      whereClause += (whereClause ? ' AND' : ' WHERE') + ' success = ?';
+      params.push(success === 'true');
+    }
+    
+    const [rows] = await pool.execute(`
+      SELECT 
+        id, username, device_fingerprint, location_info, auth_method, 
+        auth_step, success, error_message, ip_address, user_agent, created_at
+      FROM auth_logs 
+      ${whereClause}
+      ORDER BY created_at DESC 
+      LIMIT ? OFFSET ?
+    `, [...params, parseInt(limit), offset]);
+    
+    // Contar total de registros
+    const [countResult] = await pool.execute(`
+      SELECT COUNT(*) as total FROM auth_logs ${whereClause}
+    `, params);
+    
+    const totalPages = Math.ceil(countResult[0].total / limit);
+    
+    console.log(`✅ ${rows.length} logs encontrados, página ${page} de ${totalPages}`);
+    res.json({
+      logs: rows,
+      total: countResult[0].total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: totalPages
+    });
+    
+  } catch (error) {
+    console.error('❌ Error obteniendo logs:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Endpoint para sincronizar sesión del frontend con el backend
+app.post('/api/auth/sync-session', async (req, res) => {
+  const { username, displayName, email } = req.body;
+  
+  try {
+    console.log('🔄 Sincronizando sesión para:', username);
+    
+    if (!username) {
+      return res.status(400).json({ error: 'Username es requerido' });
+    }
+    
+    // Verificar que el usuario existe en la base de datos
+    const [rows] = await pool.execute(
+      'SELECT * FROM users WHERE username = ? AND is_active = TRUE',
+      [username]
+    );
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    
+    const dbUser = rows[0];
+    
+    // Crear sesión en el backend
+    const user = {
+      username: dbUser.username,
+      email: dbUser.email,
+      displayName: dbUser.full_name,
+      source: 'sync'
+    };
+    
+    req.session.user = user;
+    
+    // Guardar sesión explícitamente
+    req.session.save((err) => {
+      if (err) {
+        console.error('❌ Error guardando sesión:', err);
+        return res.status(500).json({ error: 'Error guardando sesión' });
+      }
+      
+      console.log('✅ Sesión sincronizada exitosamente');
+      res.json({
+        success: true,
+        user: user,
+        message: 'Sesión sincronizada exitosamente'
+      });
+    });
+    
+  } catch (error) {
+    console.error('❌ Error sincronizando sesión:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+console.log('✅ Rutas de administración configuradas');
+
 // ===== INICIALIZACIÓN =====
 
 const startServer = async () => {
