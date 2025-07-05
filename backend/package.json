@@ -10,8 +10,8 @@
     "test:users": "node test-setup.js users",
     "test:verify": "node verify-installation.js",
     "test:deps": "node verify-installation.js deps",
-    "db:init": "node scripts/init-database-fixed.js",
-    "db:check": "node scripts/init-database-fixed.js check"
+    "db:init": "node scripts/init-database.js",
+    "db:check": "node scripts/init-database.js check"
   },
   "dependencies": {
     "express": "^4.18.2",

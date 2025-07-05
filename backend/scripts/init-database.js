@@ -5,11 +5,11 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const dbConfig = {
-  host: process.env.DB_HOST || 'localhost',
+  host: process.env.DB_HOST || "193.203.175.121",
   port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'proyecto'
+  user: process.env.DB_USER || "u496942219_moodleud",
+  password: process.env.DB_PASSWORD || "z?0e>FTA",
+  database: process.env.DB_NAME || "u496942219_moodleud",
 };
 
 const initializeDatabase = async () => {
@@ -33,25 +33,7 @@ const initializeDatabase = async () => {
     await connection.end();
     connection = await mysql.createConnection(dbConfig);
     console.log(`✅ Conectado a la base de datos '${dbConfig.database}'`);
-
-    // Crear tabla de usuarios
-    console.log('📋 Creando tabla de usuarios...');
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(100) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        email VARCHAR(100),
-        full_name VARCHAR(150),
-        is_active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_username (username),
-        INDEX idx_email (email),
-        INDEX idx_active (is_active)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
-
+    
     // Crear tabla de dispositivos autorizados
     console.log('📱 Creando tabla de dispositivos autorizados...');
     await connection.execute(`
@@ -141,40 +123,7 @@ const initializeDatabase = async () => {
         ON DUPLICATE KEY UPDATE description = VALUES(description)
       `, [key, value, description]);
     }
-
-    // Crear usuario administrador por defecto
-    console.log('👤 Creando usuarios de ejemplo...');
-    const adminPassword = await bcrypt.hash('admin123', 10);
-    const userPassword = await bcrypt.hash('usuario123', 10);
     
-    // Verificar si los usuarios ya existen
-    const [existingUsers] = await connection.execute(
-      'SELECT username FROM users WHERE username IN (?, ?)',
-      ['admin@empresa.com', 'usuario@empresa.com']
-    );
-
-    const existingUsernames = existingUsers.map(user => user.username);
-
-    if (!existingUsernames.includes('admin@empresa.com')) {
-      await connection.execute(`
-        INSERT INTO users (username, password, email, full_name, is_active) 
-        VALUES (?, ?, ?, ?, TRUE)
-      `, ['admin@empresa.com', adminPassword, 'admin@empresa.com', 'Administrador del Sistema']);
-      console.log('✅ Usuario administrador creado');
-    } else {
-      console.log('ℹ️ Usuario administrador ya existe');
-    }
-
-    if (!existingUsernames.includes('usuario@empresa.com')) {
-      await connection.execute(`
-        INSERT INTO users (username, password, email, full_name, is_active) 
-        VALUES (?, ?, ?, ?, TRUE)
-      `, ['usuario@empresa.com', userPassword, 'usuario@empresa.com', 'Usuario de Prueba']);
-      console.log('✅ Usuario de prueba creado');
-    } else {
-      console.log('ℹ️ Usuario de prueba ya existe');
-    }
-
     // Crear algunos dispositivos de ejemplo
     console.log('📱 Creando dispositivos de ejemplo...');
     const exampleDevices = [
@@ -315,10 +264,15 @@ const checkDatabase = async () => {
     });
 
     // Verificar usuarios
-    const [users] = await connection.execute('SELECT username, is_active FROM users');
-    console.log('\n👥 Usuarios encontrados:');
-    users.forEach(user => {
-      console.log(`   ${user.is_active ? '✅' : '❌'} ${user.username}`);
+    const [users] = await connection.execute(
+      "SELECT username, lastlogin FROM mdl_user"
+    );
+    const now = Math.floor(Date.now() / 1000); // Tiempo actual en segundos
+    const ninetyDaysInSeconds = 90 * 24 * 60 * 60;
+    console.log("\n👥 Usuarios encontrados:");
+    users.forEach((user) => {
+      const isActive = now - user.lastlogin <= ninetyDaysInSeconds;
+      console.log(`   ${isActive ? "✅" : "❌"} ${user.username}`);
     });
 
     // Verificar dispositivos

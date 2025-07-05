@@ -7,7 +7,7 @@ class AuthService {
     console.log(`🔗 AuthService configurado para: ${this.baseURL}`);
   }
 
-  async login({ username, password, deviceFingerprint, location, deviceId }) {
+  async login({ username, password, deviceFingerprint, location, deviceId, auth_token }) {
     try {
       console.log('🔐 Intentando login:', { username, hasPassword: !!password, deviceFingerprint: deviceFingerprint?.substring(0, 8) + '...' });
       
@@ -22,7 +22,8 @@ class AuthService {
           password,
           deviceFingerprint,
           location,
-          deviceId
+          deviceId,
+          auth_token
         }),
       });
 
