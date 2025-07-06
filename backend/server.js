@@ -771,7 +771,7 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
 
     const [rows] = await pool.execute(`
       SELECT 
-        u.id, u.username, u.email, u.firstname, u.lastname, u.lastlogin, u.timecreated, 
+        u.id, u.username, u.email, u.firstname, u.lastname, u.lastlogin, u.timecreated, u.suspended,
         COUNT(ad.id) as device_count
       FROM mdl_user u
       LEFT JOIN authorized_devices ad ON u.username = ad.username AND ad.is_active = TRUE
@@ -830,7 +830,7 @@ app.post("/api/admin/users", requireAdmin, async (req, res) => {
 
     // Verificar si el usuario ya existe
     const [existing] = await pool.execute(
-      "SELECT id FROM users WHERE username = ?",
+      "SELECT id FROM mdl_user WHERE username = ?",
       [username]
     );
 
@@ -850,7 +850,7 @@ app.post("/api/admin/users", requireAdmin, async (req, res) => {
     // Crear usuario
     const [result] = await pool.execute(
       `
-      INSERT INTO users (username, password, full_name, email, is_active, created_at)
+      INSERT INTO mdl_user (username, password, full_name, email, is_active, created_at)
       VALUES (?, ?, ?, ?, TRUE, NOW())
     `,
       [username, hashedPassword, full_name, email || username]
@@ -1181,6 +1181,147 @@ app.post("/api/auth/sync-session", async (req, res) => {
 });
 
 console.log("✅ Rutas de administración configuradas");
+
+// Obtener todas las configuraciones
+app.get('/api/admin/config', requireAdmin, async (req, res) => {
+  try {
+    console.log('⚙️ Solicitando configuraciones del sistema...');
+    
+    const [rows] = await pool.execute(`
+      SELECT config_key, config_value, description 
+      FROM system_config 
+      ORDER BY config_key
+    `);
+    
+    // Convertir a objeto para fácil acceso
+    const config = {};
+    rows.forEach(row => {
+      config[row.config_key] = {
+        value: row.config_value,
+        description: row.description
+      };
+    });
+    
+    console.log(`✅ ${rows.length} configuraciones encontradas`);
+    res.json(config);
+  } catch (error) {
+    console.error('❌ Error obteniendo configuraciones:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Actualizar una configuración específica
+app.post('/api/admin/config/:key', requireAdmin, async (req, res) => {
+  const { key } = req.params;
+  const { value } = req.body;
+  
+  try {
+    console.log(`⚙️ Actualizando configuración: ${key} = ${value}`);
+    
+    if (value === undefined || value === null) {
+      return res.status(400).json({ error: 'El valor es requerido' });
+    }
+    
+    // Validaciones específicas por tipo de configuración
+    const validations = {
+      'auth_method': (val) => ['mysql', 'ad', 'mixed'].includes(val),
+      'auto_authorize_devices': (val) => ['true', 'false'].includes(val),
+      'maintenance_mode': (val) => ['true', 'false'].includes(val),
+      'max_devices_per_user': (val) => !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 20,
+      'device_inactivity_days': (val) => !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 365,
+      'max_login_attempts': (val) => !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 20,
+      'session_timeout': (val) => !isNaN(val) && parseInt(val) >= 60000 && parseInt(val) <= 86400000 * 7
+    };
+    
+    if (validations[key] && !validations[key](value)) {
+      return res.status(400).json({ 
+        error: `Valor inválido para ${key}. Verifica los límites permitidos.` 
+      });
+    }
+    
+    // Actualizar la configuración
+    const [result] = await pool.execute(`
+      UPDATE system_config 
+      SET config_value = ?, updated_at = NOW() 
+      WHERE config_key = ?
+    `, [value, key]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Configuración no encontrada' });
+    }
+    
+    console.log(`✅ Configuración ${key} actualizada exitosamente`);
+    res.json({
+      success: true,
+      message: `Configuración ${key} actualizada exitosamente`,
+      key: key,
+      value: value
+    });
+    
+  } catch (error) {
+    console.error(`❌ Error actualizando configuración ${key}:`, error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Restablecer configuración a valores por defecto
+app.post('/api/admin/config/reset', requireAdmin, async (req, res) => {
+  try {
+    console.log('🔄 Restableciendo configuraciones a valores por defecto...');
+    
+    const defaultConfigs = [
+      ['auth_method', 'mysql'],
+      ['max_devices_per_user', '3'],
+      ['auto_authorize_devices', 'true'],
+      ['device_inactivity_days', '90'],
+      ['maintenance_mode', 'false'],
+      ['max_login_attempts', '5'],
+      ['session_timeout', '86400000']
+    ];
+    
+    for (const [key, value] of defaultConfigs) {
+      await pool.execute(`
+        UPDATE system_config 
+        SET config_value = ?, updated_at = NOW() 
+        WHERE config_key = ?
+      `, [value, key]);
+    }
+    
+    console.log('✅ Configuraciones restablecidas');
+    res.json({
+      success: true,
+      message: 'Configuraciones restablecidas a valores por defecto'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error restableciendo configuraciones:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// Obtener configuración específica
+app.get('/api/admin/config/:key', requireAdmin, async (req, res) => {
+  const { key } = req.params;
+  
+  try {
+    const [rows] = await pool.execute(
+      'SELECT config_key, config_value, description FROM system_config WHERE config_key = ?',
+      [key]
+    );
+    
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Configuración no encontrada' });
+    }
+    
+    res.json(rows[0]);
+  } catch (error) {
+    console.error(`❌ Error obteniendo configuración ${key}:`, error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+console.log('✅ Rutas de configuración del sistema agregadas');
+
 
 // ===== INICIALIZACIÓN =====
 

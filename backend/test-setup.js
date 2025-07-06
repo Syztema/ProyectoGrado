@@ -44,7 +44,7 @@ async function runDiagnostics() {
     // 4. Verificar tablas
     console.log('\n3. 📋 TABLAS:');
     const [tables] = await connection.query('SHOW TABLES');
-    const requiredTables = ['users', 'authorized_devices', 'auth_logs', 'system_config', 'sessions'];
+    const requiredTables = ['mdl_user', 'authorized_devices', 'auth_logs', 'system_config', 'sessions'];
     
     for (const table of requiredTables) {
       const exists = tables.find(t => Object.values(t)[0] === table);
@@ -58,7 +58,7 @@ async function runDiagnostics() {
     // 5. Verificar usuarios de prueba
     console.log('\n4. 👥 USUARIOS DE PRUEBA:');
     try {
-      const [users] = await connection.execute('SELECT username, LENGTH(password) as pass_length, is_active FROM users');
+      const [users] = await connection.execute('SELECT username, LENGTH(password) as pass_length, suspended FROM mdl_user where suspended = FALSE');
       
       if (users.length === 0) {
         console.log('   ❌ No hay usuarios en la base de datos');
@@ -66,7 +66,7 @@ async function runDiagnostics() {
       } else {
         console.log(`   📊 Total usuarios: ${users.length}`);
         users.forEach(user => {
-          console.log(`   ${user.is_active ? '✅' : '❌'} ${user.username} (password: ${user.pass_length} chars)`);
+          console.log(`   ${user.suspended ? '❌' : '✅'} ${user.username} (password: ${user.pass_length} chars)`);
         });
       }
     } catch (error) {
@@ -108,7 +108,7 @@ async function runDiagnostics() {
       const testPass = 'admin123';
       
       const [userRows] = await connection.execute(
-        'SELECT username, password FROM users WHERE username = ? AND is_active = TRUE',
+        'SELECT username, password FROM mdl_user WHERE username = ?',
         [testUser]
       );
       

@@ -14,6 +14,7 @@ const Admin = () => {
   const [logs, setLogs] = useState([]);
   const [logsPage, setLogsPage] = useState(1);
   const [logsTotalPages, setLogsTotalPages] = useState(1);
+  const [config, setConfig] = useState({});
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [modalType, setModalType] = useState("");
@@ -90,6 +91,13 @@ const Admin = () => {
   useEffect(() => {
     if (activeSection === "logs" && sessionChecked) {
       loadLogs();
+    }
+  }, [activeSection, sessionChecked]);
+
+  // Cargar configuración cuando se selecciona la sección
+  useEffect(() => {
+    if (activeSection === 'settings' && sessionChecked) {
+      loadConfig();
     }
   }, [activeSection, sessionChecked]);
 
@@ -181,9 +189,79 @@ const Admin = () => {
     }
   };
 
+  const loadConfig = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/admin/config', {
+        credentials: 'include'
+      });
+      
+      if (!response.ok) {
+        throw new Error('Error al cargar configuración');
+      }
+      
+      const data = await response.json();
+      setConfig(data);
+    } catch (error) {
+      console.error('Error cargando configuración:', error);
+      alert('Error cargando configuración: ' + error.message);
+    }
+  };
+
+  const handleConfigUpdate = async (key, value) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/admin/config/${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ value })
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        // Actualizar el estado local
+        setConfig(prev => ({
+          ...prev,
+          [key]: { ...prev[key], value }
+        }));
+        alert(result.message);
+      } else {
+        alert('Error actualizando configuración: ' + result.error);
+      }
+    } catch (error) {
+      console.error('Error actualizando configuración:', error);
+      alert('Error actualizando configuración: ' + error.message);
+    }
+  };
+
+  const handleResetConfig = async () => {
+    if (!window.confirm('¿Estás seguro de que quieres restablecer todas las configuraciones a los valores por defecto?')) {
+      return;
+    }
+    
+    try {
+      const response = await fetch('http://localhost:3001/api/admin/config/reset', {
+        method: 'POST',
+        credentials: 'include'
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok) {
+        await loadConfig(); // Recargar configuraciones
+        alert(result.message);
+      } else {
+        alert('Error restableciendo configuraciones: ' + result.error);
+      }
+    } catch (error) {
+      console.error('Error restableciendo configuraciones:', error);
+      alert('Error restableciendo configuraciones: ' + error.message);
+    }
+  };
+
   const handleCreateUser = async (userData) => {
     try {
-      const response = await fetch("/api/admin/users", {
+      const response = await fetch("http://localhost:3001/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -208,7 +286,7 @@ const Admin = () => {
 
   const handleToggleUserStatus = async (userId) => {
     try {
-      const response = await fetch(`/api/admin/users/${userId}/toggle`, {
+      const response = await fetch(`http://localhost:3001/api/admin/users/${userId}/toggle`, {
         method: "POST",
         credentials: "include",
       });
@@ -235,7 +313,7 @@ const Admin = () => {
     }
 
     try {
-      const response = await fetch(`/api/admin/devices/${deviceId}/revoke`, {
+      const response = await fetch(`http://localhost:3001/api/admin/devices/${deviceId}/revoke`, {
         method: "POST",
         credentials: "include",
       });
@@ -256,7 +334,7 @@ const Admin = () => {
 
   const handleAuthorizeDevice = async (deviceData) => {
     try {
-      const response = await fetch("/api/admin/devices/authorize", {
+      const response = await fetch("http://localhost:3001/api/admin/devices/authorize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -295,7 +373,7 @@ const Admin = () => {
     }
 
     try {
-      const response = await fetch("/api/admin/devices/cleanup", {
+      const response = await fetch("http://localhost:3001/api/admin/devices/cleanup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -426,7 +504,7 @@ const Admin = () => {
           ➕ Crear Usuario
         </button>
       </div>
-
+      
       <div className="users-grid">
         {users.map((user) => (
           <div key={user.id} className="user-card">
@@ -442,14 +520,10 @@ const Admin = () => {
               </div>
               <div
                 className={`user-status ${
-                  Date.now() / 1000 - user.lastlogin <= 90 * 24 * 60 * 60
-                    ? "active"
-                    : "inactive"
+                  user.is_active ? "active" : "inactive"
                 }`}
               >
-                {Date.now() / 1000 - user.lastlogin <= 90 * 24 * 60 * 60
-                  ? "✅ Activo"
-                  : "❌ Inactivo"}
+                {user.is_active ? "✅ Activo" : "❌ Inactivo"}
               </div>
             </div>
 
@@ -682,17 +756,234 @@ const Admin = () => {
     </div>
   );
 
+  const renderSettings = () => (
+    <div className="admin-settings">
+      <div className="section-header">
+        <h2>⚙️ Configuración del Sistema</h2>
+        <div>
+          <button onClick={loadConfig} className="refresh-btn">
+            🔄 Actualizar
+          </button>
+          <button 
+            onClick={handleResetConfig}
+            className="create-btn" 
+            style={{ 
+              marginLeft: '0.5rem', 
+              background: 'linear-gradient(135deg, #f59e0b, #d97706)' 
+            }}
+          >
+            🔄 Restablecer
+          </button>
+        </div>
+      </div>
+      
+      <div className="config-grid">
+        {/* Configuración de Autenticación */}
+        <div className="config-section">
+          <h3>🔐 Autenticación</h3>
+          
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Método de Autenticación</span>
+              <span className="config-description">
+                {config.auth_method?.description}
+              </span>
+            </label>
+            <select 
+              value={config.auth_method?.value || 'mysql'}
+              onChange={(e) => handleConfigUpdate('auth_method', e.target.value)}
+              className="config-select"
+            >
+              <option value="mysql">MySQL</option>
+              <option value="ad">Active Directory</option>
+              <option value="mixed">Mixto (MySQL + AD)</option>
+            </select>
+          </div>
+
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Máximo de Intentos de Login</span>
+              <span className="config-description">
+                {config.max_login_attempts?.description}
+              </span>
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={config.max_login_attempts?.value || '5'}
+              onChange={(e) => handleConfigUpdate('max_login_attempts', e.target.value)}
+              className="config-input"
+            />
+          </div>
+
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Timeout de Sesión (milisegundos)</span>
+              <span className="config-description">
+                {config.session_timeout?.description} 
+                <br />
+                <small>Actual: {((config.session_timeout?.value || 86400000) / 1000 / 60 / 60).toFixed(1)} horas</small>
+              </span>
+            </label>
+            <select
+              value={config.session_timeout?.value || '86400000'}
+              onChange={(e) => handleConfigUpdate('session_timeout', e.target.value)}
+              className="config-select"
+            >
+              <option value="3600000">1 hora</option>
+              <option value="7200000">2 horas</option>
+              <option value="14400000">4 horas</option>
+              <option value="28800000">8 horas</option>
+              <option value="43200000">12 horas</option>
+              <option value="86400000">24 horas</option>
+              <option value="604800000">7 días</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Configuración de Dispositivos */}
+        <div className="config-section">
+          <h3>📱 Dispositivos</h3>
+          
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Auto-autorizar Dispositivos</span>
+              <span className="config-description">
+                {config.auto_authorize_devices?.description}
+              </span>
+            </label>
+            <div className="config-toggle">
+              <input
+                type="checkbox"
+                id="auto_authorize_devices"
+                checked={config.auto_authorize_devices?.value === 'true'}
+                onChange={(e) => handleConfigUpdate('auto_authorize_devices', e.target.checked ? 'true' : 'false')}
+                className="config-checkbox"
+              />
+              <label htmlFor="auto_authorize_devices" className="toggle-label">
+                {config.auto_authorize_devices?.value === 'true' ? 'Activado' : 'Desactivado'}
+              </label>
+            </div>
+          </div>
+
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Máximo Dispositivos por Usuario</span>
+              <span className="config-description">
+                {config.max_devices_per_user?.description}
+              </span>
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={config.max_devices_per_user?.value || '3'}
+              onChange={(e) => handleConfigUpdate('max_devices_per_user', e.target.value)}
+              className="config-input"
+            />
+          </div>
+
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Días de Inactividad para Revocación</span>
+              <span className="config-description">
+                {config.device_inactivity_days?.description}
+              </span>
+            </label>
+            <select
+              value={config.device_inactivity_days?.value || '90'}
+              onChange={(e) => handleConfigUpdate('device_inactivity_days', e.target.value)}
+              className="config-select"
+            >
+              <option value="7">7 días</option>
+              <option value="14">14 días</option>
+              <option value="30">30 días</option>
+              <option value="60">60 días</option>
+              <option value="90">90 días</option>
+              <option value="180">180 días</option>
+              <option value="365">1 año</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Configuración del Sistema */}
+        <div className="config-section">
+          <h3>🛠️ Sistema</h3>
+          
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Modo de Mantenimiento</span>
+              <span className="config-description">
+              </span>
+            </label>
+            <div className="config-toggle">
+              <input
+                type="checkbox"
+                id="maintenance_mode"
+                checked={config.maintenance_mode?.value === 'true'}
+                onChange={(e) => handleConfigUpdate('maintenance_mode', e.target.checked ? 'true' : 'false')}
+                className="config-checkbox"
+              />
+              <label htmlFor="maintenance_mode" className="toggle-label">
+                {config.maintenance_mode?.value === 'true' ? 'Activado' : 'Desactivado'}
+              </label>
+            </div>
+          </div>
+
+          <div className="config-item">
+            <label className="config-label">
+              <span className="config-title">Versión del Sistema</span>
+              <span className="config-description">
+                {config.system_version?.description}
+              </span>
+            </label>
+            <input
+              type="text"
+              value={config.system_version?.value || '1.0.0'}
+              onChange={(e) => handleConfigUpdate('system_version', e.target.value)}
+              className="config-input"
+              placeholder="Ej: 1.0.0"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Estado del Sistema */}
+      <div className="system-status">
+        <h3>📊 Estado del Sistema</h3>
+        <div className="status-grid">
+          <div className="status-item">
+            <span className="status-label">Modo de Mantenimiento:</span>
+            <span className={`status-value ${config.maintenance_mode?.value === 'true' ? 'warning' : 'success'}`}>
+              {config.maintenance_mode?.value === 'true' ? '⚠️ Activo' : '✅ Inactivo'}
+            </span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Auto-autorización:</span>
+            <span className={`status-value ${config.auto_authorize_devices?.value === 'true' ? 'success' : 'info'}`}>
+              {config.auto_authorize_devices?.value === 'true' ? '✅ Habilitada' : 'ℹ️ Deshabilitada'}
+            </span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Método de Auth:</span>
+            <span className="status-value info">
+              📋 {(config.auth_method?.value || 'mysql').toUpperCase()}
+            </span>
+          </div>
+          <div className="status-item">
+            <span className="status-label">Versión:</span>
+            <span className="status-value info">
+              🏷️ {config.system_version?.value || '1.0.0'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderModal = () => {
     if (!showModal) return null;
-
-    // Mostrar loading mientras se verifica la sesión
-    if (!sessionChecked) {
-      return (
-        <div className="admin-container">
-          <div className="loading">Verificando autenticación...</div>
-        </div>
-      );
-    }
 
     return (
       <div className="modal-overlay" onClick={closeModal}>
@@ -791,11 +1082,84 @@ const Admin = () => {
                 </div>
               </form>
             )}
+
+            {modalType === "editUser" && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.target);
+                  // Aquí puedes agregar la lógica para editar usuario
+                  alert("Función de editar usuario en desarrollo");
+                }}
+              >
+                <div className="form-group">
+                  <label>Nombre completo:</label>
+                  <input 
+                    type="text" 
+                    name="full_name" 
+                    defaultValue={formData.full_name || ''} 
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Email:</label>
+                  <input 
+                    type="email" 
+                    name="email" 
+                    defaultValue={formData.email || ''} 
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Nueva contraseña (opcional):</label>
+                  <input type="password" name="password" />
+                </div>
+                <div className="form-actions">
+                  <button type="submit" className="submit-btn">
+                    Actualizar Usuario
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    className="cancel-btn"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       </div>
     );
   };
+
+  // Mostrar loading mientras se verifica la sesión
+  if (!sessionChecked) {
+    return (
+      <div className="admin-container">
+        <div className="loading">
+          <div>Verificando autenticación...</div>
+          {user && (
+            <div style={{ marginTop: '20px' }}>
+              <p>Usuario detectado: {user.username}</p>
+              <button 
+                onClick={checkAuthentication}
+                style={{
+                  padding: '10px 20px',
+                  background: '#007bff',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer'
+                }}
+              >
+                🔄 Sincronizar Sesión
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="admin-container">
@@ -869,16 +1233,11 @@ const Admin = () => {
         {activeSection === "logs" && renderLogs()}
         {activeSection === "geofences" && (
           <div className="coming-soon">
-            <h2>⚙️ Configuración del Sistema</h2>
+            <h2>📍 Geocercas</h2>
             <p>Función en desarrollo...</p>
           </div>
         )}
-        {activeSection === "settings" && (
-          <div className="coming-soon">
-            <h2>⚙️ Configuración del Sistema</h2>
-            <p>Función en desarrollo...</p>
-          </div>
-        )}
+        {activeSection === "settings" && renderSettings()}
       </div>
 
       {renderModal()}
