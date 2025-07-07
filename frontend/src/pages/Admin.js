@@ -520,10 +520,10 @@ const Admin = () => {
               </div>
               <div
                 className={`user-status ${
-                  user.is_active ? "active" : "inactive"
+                  user.suspended ? "inactive" : "active"
                 }`}
               >
-                {user.is_active ? "✅ Activo" : "❌ Inactivo"}
+                {user.suspended ? "🔒 Desactivado" : "✅ Activo"}
               </div>
             </div>
 
@@ -544,10 +544,10 @@ const Admin = () => {
               <button
                 onClick={() => handleToggleUserStatus(user.id)}
                 className={`toggle-btn ${
-                  user.is_active ? "deactivate" : "activate"
+                  user.suspended ? "activate" : "deactivate"
                 }`}
               >
-                {user.is_active ? "🔒 Desactivar" : "🔓 Activar"}
+                {user.suspended ? "🔓 Activar" : "🔒 Desactivar"}
               </button>
               <button
                 className="edit-btn"
