@@ -5,11 +5,11 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 const dbConfig = {
-  host: process.env.DB_HOST || "193.203.175.121",
-  port: process.env.DB_PORT || 3306,
-  user: process.env.DB_USER || "u496942219_moodleud",
-  password: process.env.DB_PASSWORD || "z?0e>FTA",
-  database: process.env.DB_NAME || "u496942219_moodleud",
+  host: process.env.DB_HOST || "Host Default",
+  port: process.env.DB_PORT || 1234,
+  user: process.env.DB_USER || "User Default",
+  password: process.env.DB_PASSWORD || "Password Default",
+  database: process.env.DB_NAME || "DB Default",
 };
 
 const initializeDatabase = async () => {
@@ -34,6 +34,19 @@ const initializeDatabase = async () => {
     connection = await mysql.createConnection(dbConfig);
     console.log(`✅ Conectado a la base de datos '${dbConfig.database}'`);
     
+    // Crear tabla de geocercas
+    console.log('📍 Creando tabla de geocercas...');
+    await connection.execute(`
+      CREATE TABLE IF NOT EXISTS geofences (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,        
+        coordinates JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_by BIGINT NOT NULL,
+        FOREIGN KEY (created_by) REFERENCES mdl_user(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
     // Crear tabla de dispositivos autorizados
     console.log('📱 Creando tabla de dispositivos autorizados...');
     await connection.execute(`

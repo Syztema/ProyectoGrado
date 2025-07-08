@@ -1,5 +1,5 @@
 // src/services/geoService.js
-import { getApiUrl, GEOLOCATION_OPTIONS } from '../utils/constants';
+import { getApiUrl, GEOLOCATION_OPTIONS } from "../utils/constants";
 
 class GeoService {
   constructor() {
@@ -12,7 +12,7 @@ class GeoService {
   async getCurrentPosition(options = GEOLOCATION_OPTIONS) {
     return new Promise((resolve, reject) => {
       if (!window.navigator.geolocation) {
-        reject(new Error('Geolocalización no soportada por este navegador'));
+        reject(new Error("Geolocalización no soportada por este navegador"));
         return;
       }
 
@@ -26,9 +26,9 @@ class GeoService {
             altitudeAccuracy: position.coords.altitudeAccuracy,
             heading: position.coords.heading,
             speed: position.coords.speed,
-            timestamp: position.timestamp
+            timestamp: position.timestamp,
           };
-          
+
           this.lastKnownLocation = locationData;
           resolve(locationData);
         },
@@ -43,7 +43,7 @@ class GeoService {
   // Observar cambios de ubicación
   watchPosition(onSuccess, onError, options = GEOLOCATION_OPTIONS) {
     if (!window.navigator.geolocation) {
-      onError(new Error('Geolocalización no soportada'));
+      onError(new Error("Geolocalización no soportada"));
       return null;
     }
 
@@ -57,9 +57,9 @@ class GeoService {
           altitudeAccuracy: position.coords.altitudeAccuracy,
           heading: position.coords.heading,
           speed: position.coords.speed,
-          timestamp: position.timestamp
+          timestamp: position.timestamp,
         };
-        
+
         this.lastKnownLocation = locationData;
         onSuccess(locationData);
       },
@@ -82,54 +82,56 @@ class GeoService {
 
   // Manejar errores de geolocalización
   handleGeolocationError(error) {
-    let message = 'Error desconocido obteniendo ubicación';
-    
+    let message = "Error desconocido obteniendo ubicación";
+
     switch (error.code) {
       case error.PERMISSION_DENIED:
-        message = 'Permisos de ubicación denegados por el usuario';
+        message = "Permisos de ubicación denegados por el usuario";
         break;
       case error.POSITION_UNAVAILABLE:
-        message = 'Información de ubicación no disponible';
+        message = "Información de ubicación no disponible";
         break;
       case error.TIMEOUT:
-        message = 'Tiempo de espera agotado para obtener ubicación';
+        message = "Tiempo de espera agotado para obtener ubicación";
         break;
       default:
         message = `Error de geolocalización: ${error.message}`;
         break;
     }
-    
+
     return new Error(message);
   }
 
   // Verificar permisos de geolocalización
   async checkPermissions() {
     if (!window.navigator.permissions) {
-      return { state: 'unknown' };
+      return { state: "unknown" };
     }
 
     try {
-      const permission = await window.navigator.permissions.query({ name: 'geolocation' });
+      const permission = await window.navigator.permissions.query({
+        name: "geolocation",
+      });
       return {
         state: permission.state, // 'granted', 'denied', 'prompt'
-        onchange: permission.onchange
+        onchange: permission.onchange,
       };
     } catch (error) {
-      return { state: 'unknown', error: error.message };
+      return { state: "unknown", error: error.message };
     }
   }
 
   // Calcular distancia entre dos puntos (en metros)
   calculateDistance(lat1, lng1, lat2, lng2) {
     const R = 6371e3; // Radio de la Tierra en metros
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lng2 - lng1) * Math.PI / 180;
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lng2 - lng1) * Math.PI) / 180;
 
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return R * c;
@@ -139,27 +141,27 @@ class GeoService {
   async validateLocationWithServer(location) {
     try {
       const response = await fetch(`${this.baseURL}/api/geo/validate`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
-        credentials: 'include',
+        credentials: "include",
         body: JSON.stringify({
           lat: location.lat,
           lng: location.lng,
           accuracy: location.accuracy,
-          timestamp: location.timestamp
+          timestamp: location.timestamp,
         }),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Error validando ubicación');
+        throw new Error(errorData.error || "Error validando ubicación");
       }
 
       return await response.json();
     } catch (error) {
-      console.error('Error validando ubicación con servidor:', error);
+      console.error("Error validando ubicación con servidor:", error);
       throw error;
     }
   }
@@ -168,33 +170,33 @@ class GeoService {
   async reportLocation(location, context = {}) {
     try {
       const response = await fetch(`${this.baseURL}/api/geo/report`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
-        credentials: 'include',
+        credentials: "include",
         body: JSON.stringify({
           location: {
             lat: location.lat,
             lng: location.lng,
             accuracy: location.accuracy,
-            timestamp: location.timestamp
+            timestamp: location.timestamp,
           },
           context: {
             userAgent: window.navigator.userAgent,
             platform: window.navigator.platform,
-            ...context
-          }
+            ...context,
+          },
         }),
       });
 
       if (!response.ok) {
-        console.warn('No se pudo reportar la ubicación al servidor');
+        console.warn("No se pudo reportar la ubicación al servidor");
       }
 
       return response.ok;
     } catch (error) {
-      console.warn('Error reportando ubicación:', error);
+      console.warn("Error reportando ubicación:", error);
       return false;
     }
   }
@@ -206,17 +208,41 @@ class GeoService {
 
   // Verificar si el navegador soporta geolocalización
   isGeolocationSupported() {
-    return 'geolocation' in window.navigator;
+    return "geolocation" in window.navigator;
   }
 
   // Obtener información sobre las capacidades de geolocalización
   getGeolocationCapabilities() {
     return {
       supported: this.isGeolocationSupported(),
-      permissions: 'permissions' in window.navigator,
+      permissions: "permissions" in window.navigator,
       highAccuracy: true, // La mayoría de navegadores modernos lo soportan
-      watchPosition: this.isGeolocationSupported()
+      watchPosition: this.isGeolocationSupported(),
     };
+  }
+
+  //FUNCIONES DE CREACIÓN DE GEOCERCAS
+  async saveGeofence(geofenceData) {
+    try {
+      const response = await fetch(`${this.baseURL}/api/geofences`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify(geofenceData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Error al guardar la geocerca");
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Error guardando geocerca:", error);
+      throw error;
+    }
   }
 }
 

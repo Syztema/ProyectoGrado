@@ -1,8 +1,13 @@
 // src/pages/Admin.js
 import React, { useState, useEffect } from "react";
+import { MapContainer, TileLayer, FeatureGroup } from "react-leaflet";
+import { EditControl } from "react-leaflet-draw";
 import { useAuthContext } from "../context/AuthContext";
+import { useGeolocation } from "../hooks/useGeolocation";
 import { useNavigate } from "react-router-dom";
 import "../styles/Admin.css";
+import "leaflet/dist/leaflet.css";
+import "leaflet-draw/dist/leaflet.draw.css";
 
 const Admin = () => {
   const navigate = useNavigate();
@@ -20,6 +25,13 @@ const Admin = () => {
   const [modalType, setModalType] = useState("");
   const [formData, setFormData] = useState({});
   const [sessionChecked, setSessionChecked] = useState(false);
+  //GEOCERCAS
+  const [rectangleCoords, setRectangleCoords] = React.useState(null);
+  const featureGroupRef = React.useRef();
+  const editControlRef = React.useRef();
+  const [geofenceName, setGeofenceName] = useState("");
+  const [notification, setNotification] = useState(null);
+  const { loading: loadingGeo, error, createGeofence } = useGeolocation();
 
   //Regreso a Home
   const handleGoHome = () => {
@@ -96,7 +108,7 @@ const Admin = () => {
 
   // Cargar configuración cuando se selecciona la sección
   useEffect(() => {
-    if (activeSection === 'settings' && sessionChecked) {
+    if (activeSection === "settings" && sessionChecked) {
       loadConfig();
     }
   }, [activeSection, sessionChecked]);
@@ -191,71 +203,81 @@ const Admin = () => {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/admin/config', {
-        credentials: 'include'
+      const response = await fetch("http://localhost:3001/api/admin/config", {
+        credentials: "include",
       });
-      
+
       if (!response.ok) {
-        throw new Error('Error al cargar configuración');
+        throw new Error("Error al cargar configuración");
       }
-      
+
       const data = await response.json();
       setConfig(data);
     } catch (error) {
-      console.error('Error cargando configuración:', error);
-      alert('Error cargando configuración: ' + error.message);
+      console.error("Error cargando configuración:", error);
+      alert("Error cargando configuración: " + error.message);
     }
   };
 
   const handleConfigUpdate = async (key, value) => {
     try {
-      const response = await fetch(`http://localhost:3001/api/admin/config/${key}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ value })
-      });
-      
+      const response = await fetch(
+        `http://localhost:3001/api/admin/config/${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ value }),
+        }
+      );
+
       const result = await response.json();
-      
+
       if (response.ok) {
         // Actualizar el estado local
-        setConfig(prev => ({
+        setConfig((prev) => ({
           ...prev,
-          [key]: { ...prev[key], value }
+          [key]: { ...prev[key], value },
         }));
         alert(result.message);
       } else {
-        alert('Error actualizando configuración: ' + result.error);
+        alert("Error actualizando configuración: " + result.error);
       }
     } catch (error) {
-      console.error('Error actualizando configuración:', error);
-      alert('Error actualizando configuración: ' + error.message);
+      console.error("Error actualizando configuración:", error);
+      alert("Error actualizando configuración: " + error.message);
     }
   };
 
   const handleResetConfig = async () => {
-    if (!window.confirm('¿Estás seguro de que quieres restablecer todas las configuraciones a los valores por defecto?')) {
+    if (
+      !window.confirm(
+        "¿Estás seguro de que quieres restablecer todas las configuraciones a los valores por defecto?"
+      )
+    ) {
       return;
     }
-    
+
     try {
-      const response = await fetch('http://localhost:3001/api/admin/config/reset', {
-        method: 'POST',
-        credentials: 'include'
-      });
-      
+      const response = await fetch(
+        "http://localhost:3001/api/admin/config/reset",
+        {
+          method: "POST",
+          credentials: "include",
+        }
+      );
+
       const result = await response.json();
-      
+
       if (response.ok) {
         await loadConfig(); // Recargar configuraciones
         alert(result.message);
       } else {
-        alert('Error restableciendo configuraciones: ' + result.error);
+        alert("Error restableciendo configuraciones: " + result.error);
       }
     } catch (error) {
-      console.error('Error restableciendo configuraciones:', error);
-      alert('Error restableciendo configuraciones: ' + error.message);
+      console.error("Error restableciendo configuraciones:", error);
+      alert("Error restableciendo configuraciones: " + error.message);
     }
   };
 
@@ -286,10 +308,13 @@ const Admin = () => {
 
   const handleToggleUserStatus = async (userId) => {
     try {
-      const response = await fetch(`http://localhost:3001/api/admin/users/${userId}/toggle`, {
-        method: "POST",
-        credentials: "include",
-      });
+      const response = await fetch(
+        `http://localhost:3001/api/admin/users/${userId}/toggle`,
+        {
+          method: "POST",
+          credentials: "include",
+        }
+      );
 
       const result = await response.json();
 
@@ -313,10 +338,13 @@ const Admin = () => {
     }
 
     try {
-      const response = await fetch(`http://localhost:3001/api/admin/devices/${deviceId}/revoke`, {
-        method: "POST",
-        credentials: "include",
-      });
+      const response = await fetch(
+        `http://localhost:3001/api/admin/devices/${deviceId}/revoke`,
+        {
+          method: "POST",
+          credentials: "include",
+        }
+      );
 
       const result = await response.json();
 
@@ -334,12 +362,15 @@ const Admin = () => {
 
   const handleAuthorizeDevice = async (deviceData) => {
     try {
-      const response = await fetch("http://localhost:3001/api/admin/devices/authorize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(deviceData),
-      });
+      const response = await fetch(
+        "http://localhost:3001/api/admin/devices/authorize",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(deviceData),
+        }
+      );
 
       const result = await response.json();
 
@@ -373,12 +404,15 @@ const Admin = () => {
     }
 
     try {
-      const response = await fetch("http://localhost:3001/api/admin/devices/cleanup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ days: parseInt(days) }),
-      });
+      const response = await fetch(
+        "http://localhost:3001/api/admin/devices/cleanup",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ days: parseInt(days) }),
+        }
+      );
 
       const result = await response.json();
 
@@ -404,6 +438,75 @@ const Admin = () => {
     setShowModal(false);
     setModalType("");
     setFormData({});
+  };
+
+  //FUNCIONES GEOCERCAS
+  // Manejar la creación de un rectángulo
+  const handleDrawCreated = (e) => {
+    if (e.layerType === "rectangle") {
+      const bounds = e.layer.getBounds();
+      const northWest = bounds.getNorthWest();
+      const southWest = bounds.getSouthWest();
+      const southEast = bounds.getSouthEast();
+      const northEast = bounds.getNorthEast();
+      const corners = [
+        [northWest.lng, northWest.lat],
+        [southWest.lng, southWest.lat],
+        [southEast.lng, southEast.lat],
+        [northEast.lng, northEast.lat],
+        [northWest.lng, northWest.lat],
+      ];
+      setRectangleCoords(corners);
+    }
+  };
+
+  // Limpiar el mapa
+  const handleClearRectangles = () => {
+    if (featureGroupRef.current) {
+      featureGroupRef.current.clearLayers();
+    }
+    setRectangleCoords(null);
+    setGeofenceName("");
+  };
+
+  // Guardar la geocerca
+  const handleSaveGeofence = async () => {
+    if (!rectangleCoords || !geofenceName.trim()) {
+      return;
+    }
+
+    try {
+      // Usar el ID del usuario directamente del objeto user
+      const userId = user?.id;
+
+      console.log("Creando geocerca para usuario:", {
+        id: userId,
+        username: user?.username || user?.displayName,
+      });
+
+      await createGeofence({
+        name: geofenceName,
+        coordinates: rectangleCoords,
+        created_by: userId, // Enviar el ID del usuario actual
+      });
+
+      // Limpiar el formulario después de guardar
+      handleClearRectangles();
+      setGeofenceName("");
+
+      // Mostrar mensaje de éxito
+      setNotification({
+        type: "success",
+        message: "¡Geocerca guardada exitosamente!",
+      });
+    } catch (error) {
+      setNotification({
+        type: "error",
+        message: `Error al guardar la geocerca: ${
+          error.message || "Error desconocido"
+        }`,
+      });
+    }
   };
 
   const renderDashboard = () => (
@@ -504,7 +607,7 @@ const Admin = () => {
           ➕ Crear Usuario
         </button>
       </div>
-      
+
       <div className="users-grid">
         {users.map((user) => (
           <div key={user.id} className="user-card">
@@ -756,6 +859,139 @@ const Admin = () => {
     </div>
   );
 
+  const renderGeofences = () => (
+    <div className="geofence-module">
+      {notification && (
+        <div
+          className={`notification ${notification.type}`}
+          style={{
+            position: "fixed",
+            top: "20px",
+            right: "20px",
+            padding: "10px 20px",
+            borderRadius: "4px",
+            backgroundColor:
+              notification.type === "success" ? "#4CAF50" : "#f44336",
+            color: "white",
+            zIndex: 1000,
+            boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
+          }}
+        >
+          {notification.message}
+          <button
+            onClick={() => setNotification(null)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "white",
+              marginLeft: "10px",
+              cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      <div className="dashboard-header">
+        <h2>📍 Geocercas</h2>
+        <button
+          onClick={handleClearRectangles}
+          className="action-btn secondary"
+        >
+          🧹 Limpiar
+        </button>
+      </div>
+
+      <div
+        className="geofence-map-wrap"
+        style={{ height: 400, margin: "16px 0" }}
+      >
+        <MapContainer
+          center={[4.5799523885270395, -74.15758078575806]}
+          zoom={16}
+          style={{ height: "100%", width: "100%" }}
+        >
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <FeatureGroup ref={featureGroupRef}>
+            <EditControl
+              position="topright"
+              onCreated={handleDrawCreated}
+              ref={editControlRef}
+              draw={{
+                rectangle: true,
+                polyline: false,
+                polygon: false,
+                circle: false,
+                marker: false,
+                circlemarker: false,
+              }}
+              edit={{
+                edit: false,
+                remove: false,
+              }}
+            />
+          </FeatureGroup>
+        </MapContainer>
+      </div>
+
+      <div className="geofence-coords">
+        <h3>🧭 Coordenadas del Rectángulo</h3>
+        {rectangleCoords ? (
+          <>
+            <pre
+              style={{
+                background: "#f5f5f5",
+                padding: "10px",
+                borderRadius: 4,
+              }}
+            >
+              {JSON.stringify(rectangleCoords, null, 2)}
+            </pre>
+            <div className="geofence-actions" style={{ marginTop: "15px" }}>
+              <input
+                type="text"
+                value={geofenceName}
+                onChange={(e) => setGeofenceName(e.target.value)}
+                placeholder="Nombre de la geocerca"
+                className="geofence-name-input"
+                style={{
+                  padding: "8px 12px",
+                  marginRight: "10px",
+                  borderRadius: "4px",
+                  border: "1px solid #ccc",
+                  width: "250px",
+                }}
+              />
+              <button
+                onClick={handleSaveGeofence}
+                className="action-btn primary"
+                disabled={!geofenceName.trim() || loadingGeo}
+                style={{
+                  padding: "8px 16px",
+                  backgroundColor: "#4CAF50",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor:
+                    geofenceName.trim() && !loadingGeo
+                      ? "pointer"
+                      : "not-allowed",
+                }}
+              >
+                {loadingGeo ? "Guardando..." : "💾 Guardar Geocerca"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div style={{ color: "#888" }}>
+            Selecciona la herramienta en el mapa y dibuja un rectángulo.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const renderSettings = () => (
     <div className="admin-settings">
       <div className="section-header">
@@ -764,24 +1000,24 @@ const Admin = () => {
           <button onClick={loadConfig} className="refresh-btn">
             🔄 Actualizar
           </button>
-          <button 
+          <button
             onClick={handleResetConfig}
-            className="create-btn" 
-            style={{ 
-              marginLeft: '0.5rem', 
-              background: 'linear-gradient(135deg, #f59e0b, #d97706)' 
+            className="create-btn"
+            style={{
+              marginLeft: "0.5rem",
+              background: "linear-gradient(135deg, #f59e0b, #d97706)",
             }}
           >
             🔄 Restablecer
           </button>
         </div>
       </div>
-      
+
       <div className="config-grid">
         {/* Configuración de Autenticación */}
         <div className="config-section">
           <h3>🔐 Autenticación</h3>
-          
+
           <div className="config-item">
             <label className="config-label">
               <span className="config-title">Método de Autenticación</span>
@@ -789,9 +1025,11 @@ const Admin = () => {
                 {config.auth_method?.description}
               </span>
             </label>
-            <select 
-              value={config.auth_method?.value || 'mysql'}
-              onChange={(e) => handleConfigUpdate('auth_method', e.target.value)}
+            <select
+              value={config.auth_method?.value || "mysql"}
+              onChange={(e) =>
+                handleConfigUpdate("auth_method", e.target.value)
+              }
               className="config-select"
             >
               <option value="mysql">MySQL</option>
@@ -811,24 +1049,39 @@ const Admin = () => {
               type="number"
               min="1"
               max="20"
-              value={config.max_login_attempts?.value || '5'}
-              onChange={(e) => handleConfigUpdate('max_login_attempts', e.target.value)}
+              value={config.max_login_attempts?.value || "5"}
+              onChange={(e) =>
+                handleConfigUpdate("max_login_attempts", e.target.value)
+              }
               className="config-input"
             />
           </div>
 
           <div className="config-item">
             <label className="config-label">
-              <span className="config-title">Timeout de Sesión (milisegundos)</span>
+              <span className="config-title">
+                Timeout de Sesión (milisegundos)
+              </span>
               <span className="config-description">
-                {config.session_timeout?.description} 
+                {config.session_timeout?.description}
                 <br />
-                <small>Actual: {((config.session_timeout?.value || 86400000) / 1000 / 60 / 60).toFixed(1)} horas</small>
+                <small>
+                  Actual:{" "}
+                  {(
+                    (config.session_timeout?.value || 86400000) /
+                    1000 /
+                    60 /
+                    60
+                  ).toFixed(1)}{" "}
+                  horas
+                </small>
               </span>
             </label>
             <select
-              value={config.session_timeout?.value || '86400000'}
-              onChange={(e) => handleConfigUpdate('session_timeout', e.target.value)}
+              value={config.session_timeout?.value || "86400000"}
+              onChange={(e) =>
+                handleConfigUpdate("session_timeout", e.target.value)
+              }
               className="config-select"
             >
               <option value="3600000">1 hora</option>
@@ -845,7 +1098,7 @@ const Admin = () => {
         {/* Configuración de Dispositivos */}
         <div className="config-section">
           <h3>📱 Dispositivos</h3>
-          
+
           <div className="config-item">
             <label className="config-label">
               <span className="config-title">Auto-autorizar Dispositivos</span>
@@ -857,19 +1110,28 @@ const Admin = () => {
               <input
                 type="checkbox"
                 id="auto_authorize_devices"
-                checked={config.auto_authorize_devices?.value === 'true'}
-                onChange={(e) => handleConfigUpdate('auto_authorize_devices', e.target.checked ? 'true' : 'false')}
+                checked={config.auto_authorize_devices?.value === "true"}
+                onChange={(e) =>
+                  handleConfigUpdate(
+                    "auto_authorize_devices",
+                    e.target.checked ? "true" : "false"
+                  )
+                }
                 className="config-checkbox"
               />
               <label htmlFor="auto_authorize_devices" className="toggle-label">
-                {config.auto_authorize_devices?.value === 'true' ? 'Activado' : 'Desactivado'}
+                {config.auto_authorize_devices?.value === "true"
+                  ? "Activado"
+                  : "Desactivado"}
               </label>
             </div>
           </div>
 
           <div className="config-item">
             <label className="config-label">
-              <span className="config-title">Máximo Dispositivos por Usuario</span>
+              <span className="config-title">
+                Máximo Dispositivos por Usuario
+              </span>
               <span className="config-description">
                 {config.max_devices_per_user?.description}
               </span>
@@ -878,22 +1140,28 @@ const Admin = () => {
               type="number"
               min="1"
               max="20"
-              value={config.max_devices_per_user?.value || '3'}
-              onChange={(e) => handleConfigUpdate('max_devices_per_user', e.target.value)}
+              value={config.max_devices_per_user?.value || "3"}
+              onChange={(e) =>
+                handleConfigUpdate("max_devices_per_user", e.target.value)
+              }
               className="config-input"
             />
           </div>
 
           <div className="config-item">
             <label className="config-label">
-              <span className="config-title">Días de Inactividad para Revocación</span>
+              <span className="config-title">
+                Días de Inactividad para Revocación
+              </span>
               <span className="config-description">
                 {config.device_inactivity_days?.description}
               </span>
             </label>
             <select
-              value={config.device_inactivity_days?.value || '90'}
-              onChange={(e) => handleConfigUpdate('device_inactivity_days', e.target.value)}
+              value={config.device_inactivity_days?.value || "90"}
+              onChange={(e) =>
+                handleConfigUpdate("device_inactivity_days", e.target.value)
+              }
               className="config-select"
             >
               <option value="7">7 días</option>
@@ -910,23 +1178,29 @@ const Admin = () => {
         {/* Configuración del Sistema */}
         <div className="config-section">
           <h3>🛠️ Sistema</h3>
-          
+
           <div className="config-item">
             <label className="config-label">
               <span className="config-title">Modo de Mantenimiento</span>
-              <span className="config-description">
-              </span>
+              <span className="config-description"></span>
             </label>
             <div className="config-toggle">
               <input
                 type="checkbox"
                 id="maintenance_mode"
-                checked={config.maintenance_mode?.value === 'true'}
-                onChange={(e) => handleConfigUpdate('maintenance_mode', e.target.checked ? 'true' : 'false')}
+                checked={config.maintenance_mode?.value === "true"}
+                onChange={(e) =>
+                  handleConfigUpdate(
+                    "maintenance_mode",
+                    e.target.checked ? "true" : "false"
+                  )
+                }
                 className="config-checkbox"
               />
               <label htmlFor="maintenance_mode" className="toggle-label">
-                {config.maintenance_mode?.value === 'true' ? 'Activado' : 'Desactivado'}
+                {config.maintenance_mode?.value === "true"
+                  ? "Activado"
+                  : "Desactivado"}
               </label>
             </div>
           </div>
@@ -940,8 +1214,10 @@ const Admin = () => {
             </label>
             <input
               type="text"
-              value={config.system_version?.value || '1.0.0'}
-              onChange={(e) => handleConfigUpdate('system_version', e.target.value)}
+              value={config.system_version?.value || "1.0.0"}
+              onChange={(e) =>
+                handleConfigUpdate("system_version", e.target.value)
+              }
               className="config-input"
               placeholder="Ej: 1.0.0"
             />
@@ -955,26 +1231,42 @@ const Admin = () => {
         <div className="status-grid">
           <div className="status-item">
             <span className="status-label">Modo de Mantenimiento:</span>
-            <span className={`status-value ${config.maintenance_mode?.value === 'true' ? 'warning' : 'success'}`}>
-              {config.maintenance_mode?.value === 'true' ? '⚠️ Activo' : '✅ Inactivo'}
+            <span
+              className={`status-value ${
+                config.maintenance_mode?.value === "true"
+                  ? "warning"
+                  : "success"
+              }`}
+            >
+              {config.maintenance_mode?.value === "true"
+                ? "⚠️ Activo"
+                : "✅ Inactivo"}
             </span>
           </div>
           <div className="status-item">
             <span className="status-label">Auto-autorización:</span>
-            <span className={`status-value ${config.auto_authorize_devices?.value === 'true' ? 'success' : 'info'}`}>
-              {config.auto_authorize_devices?.value === 'true' ? '✅ Habilitada' : 'ℹ️ Deshabilitada'}
+            <span
+              className={`status-value ${
+                config.auto_authorize_devices?.value === "true"
+                  ? "success"
+                  : "info"
+              }`}
+            >
+              {config.auto_authorize_devices?.value === "true"
+                ? "✅ Habilitada"
+                : "ℹ️ Deshabilitada"}
             </span>
           </div>
           <div className="status-item">
             <span className="status-label">Método de Auth:</span>
             <span className="status-value info">
-              📋 {(config.auth_method?.value || 'mysql').toUpperCase()}
+              📋 {(config.auth_method?.value || "mysql").toUpperCase()}
             </span>
           </div>
           <div className="status-item">
             <span className="status-label">Versión:</span>
             <span className="status-value info">
-              🏷️ {config.system_version?.value || '1.0.0'}
+              🏷️ {config.system_version?.value || "1.0.0"}
             </span>
           </div>
         </div>
@@ -1094,18 +1386,18 @@ const Admin = () => {
               >
                 <div className="form-group">
                   <label>Nombre completo:</label>
-                  <input 
-                    type="text" 
-                    name="full_name" 
-                    defaultValue={formData.full_name || ''} 
+                  <input
+                    type="text"
+                    name="full_name"
+                    defaultValue={formData.full_name || ""}
                   />
                 </div>
                 <div className="form-group">
                   <label>Email:</label>
-                  <input 
-                    type="email" 
-                    name="email" 
-                    defaultValue={formData.email || ''} 
+                  <input
+                    type="email"
+                    name="email"
+                    defaultValue={formData.email || ""}
                   />
                 </div>
                 <div className="form-group">
@@ -1139,17 +1431,17 @@ const Admin = () => {
         <div className="loading">
           <div>Verificando autenticación...</div>
           {user && (
-            <div style={{ marginTop: '20px' }}>
+            <div style={{ marginTop: "20px" }}>
               <p>Usuario detectado: {user.username}</p>
-              <button 
+              <button
                 onClick={checkAuthentication}
                 style={{
-                  padding: '10px 20px',
-                  background: '#007bff',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '5px',
-                  cursor: 'pointer'
+                  padding: "10px 20px",
+                  background: "#007bff",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: "pointer",
                 }}
               >
                 🔄 Sincronizar Sesión
@@ -1166,7 +1458,9 @@ const Admin = () => {
       {/* Sidebar */}
       <div className="admin-sidebar">
         <div className="sidebar-header">
-          <button className="logout-btn" onClick={handleGoHome}>Regresar</button>
+          <button className="logout-btn" onClick={handleGoHome}>
+            Regresar
+          </button>
           <h2>🔐 Administración</h2>
           <p>Bienvenido, {user?.displayName || user?.username}</p>
         </div>
@@ -1231,12 +1525,7 @@ const Admin = () => {
         {activeSection === "users" && renderUsers()}
         {activeSection === "devices" && renderDevices()}
         {activeSection === "logs" && renderLogs()}
-        {activeSection === "geofences" && (
-          <div className="coming-soon">
-            <h2>📍 Geocercas</h2>
-            <p>Función en desarrollo...</p>
-          </div>
-        )}
+        {activeSection === "geofences" && renderGeofences()}
         {activeSection === "settings" && renderSettings()}
       </div>
 

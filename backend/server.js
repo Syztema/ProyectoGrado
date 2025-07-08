@@ -1,4 +1,4 @@
-// server.js 
+// server.js
 const express = require("express");
 const mysql = require("mysql2/promise");
 const bodyParser = require("body-parser");
@@ -33,11 +33,11 @@ const PORT = process.env.PORT || 3001;
 
 // Configuración de base de datos MySQL
 const dbConfig = {
-  host: process.env.DB_HOST || "193.203.175.121",
+  host: process.env.DB_HOST || "DEFAULT",
   port: parseInt(process.env.DB_PORT) || 3306,
-  user: process.env.DB_USER || "u496942219_moodleud",
-  password: process.env.DB_PASSWORD || "z?0e>FTA",
-  database: process.env.DB_NAME || "u496942219_moodleud",
+  user: process.env.DB_USER || "DEFAULT",
+  password: process.env.DB_PASSWORD || "DEFAULT",
+  database: process.env.DB_NAME || "DEFAULT",
   acquireTimeout: 60000,
   timeout: 60000,
   reconnect: true,
@@ -54,6 +54,14 @@ try {
 }
 
 // ===== MIDDLEWARE =====
+const authMiddleware = (req, res, next) => {
+  // Verifica si el usuario está autenticado
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ error: "No autenticado" });
+  }
+  req.userId = req.session.userId;
+  next();
+};
 
 // Seguridad básica
 app.use(
@@ -1183,145 +1191,292 @@ app.post("/api/auth/sync-session", async (req, res) => {
 console.log("✅ Rutas de administración configuradas");
 
 // Obtener todas las configuraciones
-app.get('/api/admin/config', requireAdmin, async (req, res) => {
+app.get("/api/admin/config", requireAdmin, async (req, res) => {
   try {
-    console.log('⚙️ Solicitando configuraciones del sistema...');
-    
+    console.log("⚙️ Solicitando configuraciones del sistema...");
+
     const [rows] = await pool.execute(`
       SELECT config_key, config_value, description 
       FROM system_config 
       ORDER BY config_key
     `);
-    
+
     // Convertir a objeto para fácil acceso
     const config = {};
-    rows.forEach(row => {
+    rows.forEach((row) => {
       config[row.config_key] = {
         value: row.config_value,
-        description: row.description
+        description: row.description,
       };
     });
-    
+
     console.log(`✅ ${rows.length} configuraciones encontradas`);
     res.json(config);
   } catch (error) {
-    console.error('❌ Error obteniendo configuraciones:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error("❌ Error obteniendo configuraciones:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
 // Actualizar una configuración específica
-app.post('/api/admin/config/:key', requireAdmin, async (req, res) => {
+app.post("/api/admin/config/:key", requireAdmin, async (req, res) => {
   const { key } = req.params;
   const { value } = req.body;
-  
+
   try {
     console.log(`⚙️ Actualizando configuración: ${key} = ${value}`);
-    
+
     if (value === undefined || value === null) {
-      return res.status(400).json({ error: 'El valor es requerido' });
+      return res.status(400).json({ error: "El valor es requerido" });
     }
-    
+
     // Validaciones específicas por tipo de configuración
     const validations = {
-      'auth_method': (val) => ['mysql', 'ad', 'mixed'].includes(val),
-      'auto_authorize_devices': (val) => ['true', 'false'].includes(val),
-      'maintenance_mode': (val) => ['true', 'false'].includes(val),
-      'max_devices_per_user': (val) => !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 20,
-      'device_inactivity_days': (val) => !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 365,
-      'max_login_attempts': (val) => !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 20,
-      'session_timeout': (val) => !isNaN(val) && parseInt(val) >= 60000 && parseInt(val) <= 86400000 * 7
+      auth_method: (val) => ["mysql", "ad", "mixed"].includes(val),
+      auto_authorize_devices: (val) => ["true", "false"].includes(val),
+      maintenance_mode: (val) => ["true", "false"].includes(val),
+      max_devices_per_user: (val) =>
+        !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 20,
+      device_inactivity_days: (val) =>
+        !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 365,
+      max_login_attempts: (val) =>
+        !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 20,
+      session_timeout: (val) =>
+        !isNaN(val) && parseInt(val) >= 60000 && parseInt(val) <= 86400000 * 7,
     };
-    
+
     if (validations[key] && !validations[key](value)) {
-      return res.status(400).json({ 
-        error: `Valor inválido para ${key}. Verifica los límites permitidos.` 
+      return res.status(400).json({
+        error: `Valor inválido para ${key}. Verifica los límites permitidos.`,
       });
     }
-    
+
     // Actualizar la configuración
-    const [result] = await pool.execute(`
+    const [result] = await pool.execute(
+      `
       UPDATE system_config 
       SET config_value = ?, updated_at = NOW() 
       WHERE config_key = ?
-    `, [value, key]);
-    
+    `,
+      [value, key]
+    );
+
     if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Configuración no encontrada' });
+      return res.status(404).json({ error: "Configuración no encontrada" });
     }
-    
+
     console.log(`✅ Configuración ${key} actualizada exitosamente`);
     res.json({
       success: true,
       message: `Configuración ${key} actualizada exitosamente`,
       key: key,
-      value: value
+      value: value,
     });
-    
   } catch (error) {
     console.error(`❌ Error actualizando configuración ${key}:`, error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
 // Restablecer configuración a valores por defecto
-app.post('/api/admin/config/reset', requireAdmin, async (req, res) => {
+app.post("/api/admin/config/reset", requireAdmin, async (req, res) => {
   try {
-    console.log('🔄 Restableciendo configuraciones a valores por defecto...');
-    
+    console.log("🔄 Restableciendo configuraciones a valores por defecto...");
+
     const defaultConfigs = [
-      ['auth_method', 'mysql'],
-      ['max_devices_per_user', '3'],
-      ['auto_authorize_devices', 'true'],
-      ['device_inactivity_days', '90'],
-      ['maintenance_mode', 'false'],
-      ['max_login_attempts', '5'],
-      ['session_timeout', '86400000']
+      ["auth_method", "mysql"],
+      ["max_devices_per_user", "3"],
+      ["auto_authorize_devices", "true"],
+      ["device_inactivity_days", "90"],
+      ["maintenance_mode", "false"],
+      ["max_login_attempts", "5"],
+      ["session_timeout", "86400000"],
     ];
-    
+
     for (const [key, value] of defaultConfigs) {
-      await pool.execute(`
+      await pool.execute(
+        `
         UPDATE system_config 
         SET config_value = ?, updated_at = NOW() 
         WHERE config_key = ?
-      `, [value, key]);
+      `,
+        [value, key]
+      );
     }
-    
-    console.log('✅ Configuraciones restablecidas');
+
+    console.log("✅ Configuraciones restablecidas");
     res.json({
       success: true,
-      message: 'Configuraciones restablecidas a valores por defecto'
+      message: "Configuraciones restablecidas a valores por defecto",
     });
-    
   } catch (error) {
-    console.error('❌ Error restableciendo configuraciones:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    console.error("❌ Error restableciendo configuraciones:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
 // Obtener configuración específica
-app.get('/api/admin/config/:key', requireAdmin, async (req, res) => {
+app.get("/api/admin/config/:key", requireAdmin, async (req, res) => {
   const { key } = req.params;
-  
+
   try {
     const [rows] = await pool.execute(
-      'SELECT config_key, config_value, description FROM system_config WHERE config_key = ?',
+      "SELECT config_key, config_value, description FROM system_config WHERE config_key = ?",
       [key]
     );
-    
+
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'Configuración no encontrada' });
+      return res.status(404).json({ error: "Configuración no encontrada" });
     }
-    
+
     res.json(rows[0]);
   } catch (error) {
     console.error(`❌ Error obteniendo configuración ${key}:`, error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
-console.log('✅ Rutas de configuración del sistema agregadas');
+console.log("✅ Rutas de configuración del sistema agregadas");
 
+// ===== GEOCERCAS API =====
+
+// Crear una nueva geocerca
+app.post("/api/geofences", async (req, res) => {
+  try {
+    const { name, coordinates, created_by } = req.body;
+
+    // Usar el ID enviado desde el cliente, o usar un ID por defecto si no se envía
+    const userId = created_by || req.session?.user?.id || 2;
+
+    console.log("📍 Creando geocerca:", { name, userId });
+
+    // Validación básica
+    if (!name || !coordinates || !Array.isArray(coordinates)) {
+      return res.status(400).json({ error: "Datos de geocerca inválidos" });
+    }
+
+    // Insertar la geocerca en la base de datos
+    const [result] = await pool.execute(
+      "INSERT INTO geofences (name, coordinates, created_by) VALUES (?, ?, ?)",
+      [name, JSON.stringify(coordinates), userId]
+    );
+
+    console.log(
+      "✅ Geocerca creada con ID:",
+      result.insertId,
+      "por usuario ID:",
+      userId
+    );
+
+    res.status(201).json({
+      id: result.insertId,
+      name,
+      coordinates,
+      created_by: userId,
+      created_at: new Date(),
+    });
+  } catch (error) {
+    console.error("❌ Error al crear geocerca:", error);
+    res.status(500).json({ error: "Error al crear la geocerca" });
+  }
+});
+
+// Obtener todas las geocercas
+app.get("/api/geofences", async (req, res) => {
+  try {
+    console.log("📍 Obteniendo geocercas");
+
+    const [rows] = await pool.execute(`
+      SELECT 
+        g.id, g.name, g.coordinates, g.created_at, 
+        u.username as created_by_username,
+        u.firstname, u.lastname
+      FROM geofences g
+      JOIN mdl_user u ON g.created_by = u.id
+      ORDER BY g.created_at DESC
+    `);
+
+    // Parsear las coordenadas JSON
+    const geofences = rows.map((row) => ({
+      ...row,
+      coordinates: JSON.parse(row.coordinates),
+      created_by_name: `${row.firstname || ""} ${row.lastname || ""}`.trim(),
+    }));
+
+    console.log(`✅ ${geofences.length} geocercas encontradas`);
+
+    res.json(geofences);
+  } catch (error) {
+    console.error("❌ Error al obtener geocercas:", error);
+    res.status(500).json({ error: "Error al obtener las geocercas" });
+  }
+});
+
+// Verificar si una ubicación está dentro de alguna geocerca
+app.post("/api/geofences/check", async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+
+    if (!lat || !lng) {
+      return res.status(400).json({ error: "Coordenadas inválidas" });
+    }
+
+    console.log(`📍 Verificando ubicación: ${lat}, ${lng}`);
+
+    // Obtener todas las geocercas
+    const [rows] = await pool.execute(
+      "SELECT id, name, coordinates FROM geofences"
+    );
+
+    // Función para verificar si un punto está dentro de un polígono
+    const isPointInPolygon = (point, polygon) => {
+      const x = point[0];
+      const y = point[1];
+      let inside = false;
+
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const xi = polygon[i][0];
+        const yi = polygon[i][1];
+        const xj = polygon[j][0];
+        const yj = polygon[j][1];
+
+        const intersect =
+          yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+
+        if (intersect) inside = !inside;
+      }
+
+      return inside;
+    };
+
+    // Verificar cada geocerca
+    const matchingGeofences = [];
+
+    for (const row of rows) {
+      const coordinates = JSON.parse(row.coordinates);
+      if (isPointInPolygon([lng, lat], coordinates)) {
+        matchingGeofences.push({
+          id: row.id,
+          name: row.name,
+        });
+      }
+    }
+
+    console.log(
+      `✅ Ubicación verificada. Dentro de ${matchingGeofences.length} geocercas`
+    );
+
+    res.json({
+      isInside: matchingGeofences.length > 0,
+      geofences: matchingGeofences,
+    });
+  } catch (error) {
+    console.error("❌ Error al verificar ubicación:", error);
+    res.status(500).json({ error: "Error al verificar la ubicación" });
+  }
+});
+
+console.log("✅ API de Geocercas configurada");
 
 // ===== INICIALIZACIÓN =====
 
