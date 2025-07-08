@@ -1476,6 +1476,34 @@ app.post("/api/geofences/check", async (req, res) => {
   }
 });
 
+// Eliminar una geocerca
+app.delete("/api/geofences/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log(`📍 Eliminando geocerca con ID: ${id}`);
+
+    // Verificar si la geocerca existe
+    const [rows] = await pool.execute("SELECT * FROM geofences WHERE id = ?", [
+      id,
+    ]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Geocerca no encontrada" });
+    }
+
+    // Eliminar la geocerca
+    await pool.execute("DELETE FROM geofences WHERE id = ?", [id]);
+
+    console.log(`✅ Geocerca eliminada: ${id}`);
+
+    res.json({ success: true, message: "Geocerca eliminada correctamente" });
+  } catch (error) {
+    console.error(`❌ Error al eliminar geocerca ${req.params.id}:`, error);
+    res.status(500).json({ error: "Error al eliminar la geocerca" });
+  }
+});
+
 console.log("✅ API de Geocercas configurada");
 
 // ===== INICIALIZACIÓN =====

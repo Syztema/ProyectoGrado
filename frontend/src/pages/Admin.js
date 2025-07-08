@@ -5,6 +5,7 @@ import { EditControl } from "react-leaflet-draw";
 import { useAuthContext } from "../context/AuthContext";
 import { useGeolocation } from "../hooks/useGeolocation";
 import { useNavigate } from "react-router-dom";
+import { geoService } from "../services/geoService";
 import "../styles/Admin.css";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -32,6 +33,10 @@ const Admin = () => {
   const [geofenceName, setGeofenceName] = useState("");
   const [notification, setNotification] = useState(null);
   const { loading: loadingGeo, error, createGeofence } = useGeolocation();
+  const [geofences, setGeofences] = useState([]);
+  const [selectedGeofence, setSelectedGeofence] = useState(null);
+  const [showGeofenceList, setShowGeofenceList] = useState(false);
+  const [loadingGeofences, setLoadingGeofences] = useState(false);
 
   //Regreso a Home
   const handleGoHome = () => {
@@ -467,6 +472,7 @@ const Admin = () => {
     }
     setRectangleCoords(null);
     setGeofenceName("");
+    setSelectedGeofence(null); // Limpiar la geocerca seleccionada
   };
 
   // Guardar la geocerca
@@ -508,6 +514,132 @@ const Admin = () => {
       });
     }
   };
+  // Función para cargar las geocercas
+  const fetchGeofences = async () => {
+    try {
+      setLoadingGeofences(true);
+
+      // Asegúrate de usar la URL completa si es necesario
+      const apiUrl = process.env.REACT_APP_API_URL || "http://localhost:3001";
+      const response = await fetch(`${apiUrl}/api/geofences`, {
+        credentials: "include",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text(); // Obtener el texto del error
+        console.error("Respuesta del servidor:", response.status, errorText);
+        throw new Error(`Error al cargar las geocercas (${response.status})`);
+      }
+
+      const data = await response.json();
+      console.log("Geocercas cargadas:", data);
+      setGeofences(data);
+      return data;
+    } catch (error) {
+      console.error("Error cargando geocercas:", error);
+      setNotification({
+        type: "error",
+        message: `Error al cargar las geocercas: ${error.message}`,
+      });
+      return [];
+    } finally {
+      setLoadingGeofences(false);
+    }
+  };
+
+  // Función para seleccionar una geocerca
+  const handleSelectGeofence = (geofence) => {
+    setSelectedGeofence(geofence);
+    setGeofenceName(geofence.name);
+    setRectangleCoords(geofence.coordinates);
+
+    // Limpiar el mapa actual
+    if (featureGroupRef.current) {
+      featureGroupRef.current.clearLayers();
+    }
+
+    // Necesitamos usar un pequeño timeout para asegurarnos de que el mapa está listo
+    setTimeout(() => {
+      // Crear un rectángulo en el mapa con las coordenadas de la geocerca
+      if (geofence && geofence.coordinates && featureGroupRef.current) {
+        try {
+          // Obtener la referencia a Leaflet
+          const L = window.L; // Leaflet debería estar disponible globalmente
+          if (L) {
+            console.log(
+              "Dibujando polígono con coordenadas:",
+              geofence.coordinates
+            );
+
+            // Convertir formato [lng, lat] a [lat, lng] que usa Leaflet
+            const latLngCoords = geofence.coordinates.map((coord) => [
+              coord[1],
+              coord[0],
+            ]);
+
+            // Crear un polígono con las coordenadas
+            const polygon = L.polygon(latLngCoords, { color: "red" });
+
+            // Añadir al mapa
+            polygon.addTo(featureGroupRef.current);
+
+            // Ajustar la vista del mapa para mostrar el polígono completo
+            const map = featureGroupRef.current._map;
+            if (map) {
+              map.fitBounds(polygon.getBounds());
+            }
+
+            console.log("Polígono dibujado correctamente");
+          } else {
+            console.error("Leaflet no está disponible");
+          }
+        } catch (error) {
+          console.error("Error dibujando el polígono:", error);
+        }
+      }
+    }, 100);
+
+    // Cerrar la lista de geocercas
+    setShowGeofenceList(false);
+  };
+
+  // Función para eliminar una geocerca
+  const handleDeleteGeofence = async (id) => {
+    if (
+      !window.confirm("¿Estás seguro de que deseas eliminar esta geocerca?")
+    ) {
+      return;
+    }
+
+    try {
+      await geoService.deleteGeofence(id);
+
+      // Actualizar la lista de geocercas
+      setGeofences(geofences.filter((g) => g.id !== id));
+
+      // Si la geocerca eliminada era la seleccionada, limpiar la selección
+      if (selectedGeofence && selectedGeofence.id === id) {
+        setSelectedGeofence(null);
+        handleClearRectangles();
+      }
+
+      setNotification({
+        type: "success",
+        message: "Geocerca eliminada exitosamente",
+      });
+    } catch (error) {
+      console.error("Error eliminando geocerca:", error);
+      setNotification({
+        type: "error",
+        message: `Error al eliminar la geocerca: ${error.message}`,
+      });
+    }
+  };
+
+  // Cargar las geocercas al montar el componente
+  useEffect(() => {
+    fetchGeofences();
+  }, []);
 
   const renderDashboard = () => (
     <div className="admin-dashboard">
@@ -895,100 +1027,248 @@ const Admin = () => {
 
       <div className="dashboard-header">
         <h2>📍 Geocercas</h2>
-        <button
-          onClick={handleClearRectangles}
-          className="action-btn secondary"
-        >
-          🧹 Limpiar
-        </button>
+        <div>
+          <button
+            onClick={() => {
+              setShowGeofenceList(!showGeofenceList);
+              if (!showGeofenceList) {
+                fetchGeofences();
+              }
+            }}
+            className="action-btn primary"
+            style={{ marginRight: "10px" }}
+          >
+            {showGeofenceList ? "🗺️ Volver al Mapa" : "📋 Ver Geocercas"}
+          </button>
+          <button
+            onClick={handleClearRectangles}
+            className="action-btn secondary"
+          >
+            🧹 Limpiar
+          </button>
+        </div>
       </div>
 
-      <div
-        className="geofence-map-wrap"
-        style={{ height: 400, margin: "16px 0" }}
-      >
-        <MapContainer
-          center={[4.5799523885270395, -74.15758078575806]}
-          zoom={16}
-          style={{ height: "100%", width: "100%" }}
-        >
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          <FeatureGroup ref={featureGroupRef}>
-            <EditControl
-              position="topright"
-              onCreated={handleDrawCreated}
-              ref={editControlRef}
-              draw={{
-                rectangle: true,
-                polyline: false,
-                polygon: false,
-                circle: false,
-                marker: false,
-                circlemarker: false,
-              }}
-              edit={{
-                edit: false,
-                remove: false,
-              }}
-            />
-          </FeatureGroup>
-        </MapContainer>
-      </div>
-
-      <div className="geofence-coords">
-        <h3>🧭 Coordenadas del Rectángulo</h3>
-        {rectangleCoords ? (
-          <>
-            <pre
+      {showGeofenceList ? (
+        <div className="geofence-list-container" style={{ marginTop: "20px" }}>
+          <h3>Geocercas Guardadas</h3>
+          {loadingGeofences ? (
+            <div className="loading">Cargando geocercas...</div>
+          ) : geofences.length === 0 ? (
+            <div
+              className="empty-state"
+              style={{ padding: "20px", textAlign: "center", color: "#666" }}
+            >
+              No hay geocercas guardadas.
+            </div>
+          ) : (
+            <div
+              className="geofence-cards"
               style={{
-                background: "#f5f5f5",
-                padding: "10px",
-                borderRadius: 4,
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
+                gap: "15px",
+                marginTop: "15px",
               }}
             >
-              {JSON.stringify(rectangleCoords, null, 2)}
-            </pre>
-            <div className="geofence-actions" style={{ marginTop: "15px" }}>
-              <input
-                type="text"
-                value={geofenceName}
-                onChange={(e) => setGeofenceName(e.target.value)}
-                placeholder="Nombre de la geocerca"
-                className="geofence-name-input"
-                style={{
-                  padding: "8px 12px",
-                  marginRight: "10px",
-                  borderRadius: "4px",
-                  border: "1px solid #ccc",
-                  width: "250px",
-                }}
-              />
-              <button
-                onClick={handleSaveGeofence}
-                className="action-btn primary"
-                disabled={!geofenceName.trim() || loadingGeo}
-                style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#4CAF50",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor:
-                    geofenceName.trim() && !loadingGeo
-                      ? "pointer"
-                      : "not-allowed",
-                }}
-              >
-                {loadingGeo ? "Guardando..." : "💾 Guardar Geocerca"}
-              </button>
+              {geofences.map((geofence) => (
+                <div
+                  key={geofence.id}
+                  className="geofence-card"
+                  style={{
+                    border: "1px solid #ddd",
+                    borderRadius: "8px",
+                    padding: "15px",
+                    backgroundColor:
+                      selectedGeofence?.id === geofence.id
+                        ? "#e3f2fd"
+                        : "#f9f9f9",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => handleSelectGeofence(geofence)}
+                >
+                  <h4 style={{ margin: "0 0 10px 0" }}>{geofence.name}</h4>
+                  <p style={{ margin: "5px 0", fontSize: "0.9em" }}>
+                    Creada: {new Date(geofence.created_at).toLocaleString()}
+                  </p>
+                  <p style={{ margin: "5px 0", fontSize: "0.9em" }}>
+                    Por:{" "}
+                    {geofence.created_by_name || geofence.created_by_username}
+                  </p>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginTop: "10px",
+                    }}
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSelectGeofence(geofence);
+                        setShowGeofenceList(false);
+                      }}
+                      className="action-btn primary"
+                      style={{
+                        padding: "5px 10px",
+                        fontSize: "0.8em",
+                      }}
+                    >
+                      🔍 Ver
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteGeofence(geofence.id);
+                      }}
+                      className="action-btn"
+                      style={{
+                        padding: "5px 10px",
+                        fontSize: "0.8em",
+                        backgroundColor: "#f44336",
+                        color: "white",
+                      }}
+                    >
+                      🗑️ Eliminar
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-          </>
-        ) : (
-          <div style={{ color: "#888" }}>
-            Selecciona la herramienta en el mapa y dibuja un rectángulo.
+          )}
+        </div>
+      ) : (
+        <>
+          <div
+            className="geofence-map-wrap"
+            style={{ height: 400, margin: "16px 0" }}
+          >
+            <MapContainer
+              center={[4.5799523885270395, -74.15758078575806]}
+              zoom={16}
+              style={{ height: "100%", width: "100%" }}
+            >
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              <FeatureGroup ref={featureGroupRef}>
+                <EditControl
+                  position="topright"
+                  onCreated={handleDrawCreated}
+                  ref={editControlRef}
+                  draw={{
+                    rectangle: true,
+                    polyline: false,
+                    polygon: false,
+                    circle: false,
+                    marker: false,
+                    circlemarker: false,
+                  }}
+                  edit={{
+                    edit: false,
+                    remove: false,
+                  }}
+                />
+              </FeatureGroup>
+            </MapContainer>
           </div>
-        )}
-      </div>
+
+          <div className="geofence-coords">
+            <h3>
+              🧭{" "}
+              {selectedGeofence
+                ? "Detalles de la Geocerca"
+                : "Coordenadas del Rectángulo"}
+            </h3>
+            {rectangleCoords ? (
+              <>
+                <pre
+                  style={{
+                    background: "#f5f5f5",
+                    padding: "10px",
+                    borderRadius: 4,
+                  }}
+                >
+                  {JSON.stringify(rectangleCoords, null, 2)}
+                </pre>
+                <div className="geofence-actions" style={{ marginTop: "15px" }}>
+                  <input
+                    type="text"
+                    value={geofenceName}
+                    onChange={(e) => setGeofenceName(e.target.value)}
+                    placeholder="Nombre de la geocerca"
+                    className="geofence-name-input"
+                    style={{
+                      padding: "8px 12px",
+                      marginRight: "10px",
+                      borderRadius: "4px",
+                      border: "1px solid #ccc",
+                      width: "250px",
+                    }}
+                  />
+
+                  {selectedGeofence ? (
+                    <div style={{ display: "flex", gap: "10px" }}>
+                      <div style={{ flex: 1 }}>
+                        <p>
+                          <strong>Creada por:</strong>{" "}
+                          {selectedGeofence.created_by_name ||
+                            selectedGeofence.created_by_username}
+                        </p>
+                        <p>
+                          <strong>Fecha:</strong>{" "}
+                          {new Date(
+                            selectedGeofence.created_at
+                          ).toLocaleString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() =>
+                          handleDeleteGeofence(selectedGeofence.id)
+                        }
+                        className="action-btn"
+                        style={{
+                          padding: "8px 16px",
+                          backgroundColor: "#f44336",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        🗑️ Eliminar Geocerca
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleSaveGeofence}
+                      className="action-btn primary"
+                      disabled={!geofenceName.trim() || loadingGeo}
+                      style={{
+                        padding: "8px 16px",
+                        backgroundColor: "#4CAF50",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "4px",
+                        cursor:
+                          geofenceName.trim() && !loadingGeo
+                            ? "pointer"
+                            : "not-allowed",
+                      }}
+                    >
+                      {loadingGeo ? "Guardando..." : "💾 Guardar Geocerca"}
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div style={{ color: "#888" }}>
+                {selectedGeofence
+                  ? "La geocerca seleccionada no tiene coordenadas válidas."
+                  : "Selecciona la herramienta en el mapa y dibuja un rectángulo."}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 

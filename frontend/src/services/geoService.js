@@ -3,7 +3,8 @@ import { getApiUrl, GEOLOCATION_OPTIONS } from "../utils/constants";
 
 class GeoService {
   constructor() {
-    this.baseURL = getApiUrl();
+    this.baseURL = process.env.REACT_APP_API_URL || 'https://localhost:3001';
+    console.log('GeoService inicializado con baseURL:', this.baseURL);
     this.watchId = null;
     this.lastKnownLocation = null;
   }
@@ -241,6 +242,36 @@ class GeoService {
       return await response.json();
     } catch (error) {
       console.error("Error guardando geocerca:", error);
+      throw error;
+    }
+  }
+
+  async deleteGeofence(id) {
+    try {
+      // Asegúrate de que baseURL apunte a tu backend
+      console.log(
+        `Eliminando geocerca con ID ${id} en URL: ${this.baseURL}/api/geofences/${id}`
+      );
+
+      const response = await fetch(`${this.baseURL}/api/geofences/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      // Si la respuesta no es OK, obtén el texto para depuración
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Error ${response.status}:`, errorText);
+        throw new Error(`Error al eliminar la geocerca (${response.status})`);
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error("Error eliminando geocerca:", error);
       throw error;
     }
   }
