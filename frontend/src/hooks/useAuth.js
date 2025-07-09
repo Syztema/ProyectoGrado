@@ -71,7 +71,7 @@ export const useAuth = () => {
 
         setAuthStep("credentials");
 
-        // 3. Autenticar credenciales con backend
+        // 3. Autenticar credenciales con backend y obtener roles
         console.log("🔐 Verificando credenciales...");
         const authResult = await authService.login({
           ...credentials,
@@ -80,10 +80,28 @@ export const useAuth = () => {
           deviceId: deviceVerification.deviceId,
         });
 
+        console.log("🔍 Respuesta completa del login:", authResult); // Nuevo log
+
         if (!authResult.success) {
           throw new Error(authResult.error || "Credenciales inválidas");
         }
 
+        // Determinar redirección antes de actualizar estado
+        const shouldRedirectToMoodle = authResult.user.roles.some((r) =>
+          [4, 5].includes(r.roleid)
+        );
+
+        // Verificar redirección
+        // if (!authResult.redirectTo) {
+        //   console.warn("⚠️ No se recibió redirectTo, determinando desde roles");
+        //   authResult.redirectTo = authResult.user?.roles?.some((r) =>
+        //     [4, 5].includes(r.roleid)
+        //   )
+        //     ? "moodle"
+        //     : "home";
+        // }
+
+        setUser(authResult.user);
         setAuthStep("success");
 
         // 🎯 CRÍTICO: Actualizar estado local Y contexto
@@ -91,12 +109,13 @@ export const useAuth = () => {
           "✅ Actualizando estado de autenticación...",
           authResult.user
         );
-        setUser(authResult.user);
         setLoading(false);
 
         return {
           success: true,
           user: authResult.user,
+          //redirectTo: authResult.redirectTo,
+          shouldRedirectToMoodle,
           deviceId: deviceVerification.deviceId,
         };
       } catch (err) {
@@ -142,7 +161,7 @@ export const useAuth = () => {
     user,
     loading,
     error,
-    setError,    
+    setError,
     authStep,
     login,
     logout,

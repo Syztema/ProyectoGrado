@@ -33,12 +33,7 @@ const Home = () => {
       alert("Falta Token");
       console.log("Falta Token");
       return;
-    }
-    /*
-    if (!user || !user.username || !user.auth_token) {
-      alert("Faltan datos de sesión. Por favor, inicia sesión nuevamente.");
-      return;
-    }*/
+    }    
 
     const redirectUrl = new URL(
       "https://moodleud.zieete.com.co/login/index.php"

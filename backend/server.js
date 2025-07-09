@@ -572,6 +572,24 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     console.log("✅ Contraseña válida con Python");
+
+    // Obtener roles del usuario
+    const [roles] = await pool.execute(
+      `
+      SELECT r.id as roleid, r.shortname 
+      FROM mdl_role_assignments ra
+      JOIN mdl_role r ON ra.roleid = r.id
+      WHERE ra.userid = ?
+    `,
+      [dbUser.id]
+    );
+
+    // Determinar si es profesor/estudiante
+    const isTeacherOrStudent = roles.some((r) => [4, 5].includes(r.roleid));
+    const redirectTo = isTeacherOrStudent ? "moodle" : "home";
+    console.log(`🎯 Roles del usuario: ${JSON.stringify(roles)}`);
+    console.log(`🎯 Redirección: ${redirectTo}`); // Nuevo log
+
     // ✅ Generar nuevo token
     const authToken = crypto.randomBytes(32).toString("hex");
     await pool.execute("UPDATE mdl_user SET auth_token = ? WHERE id = ?", [
@@ -584,11 +602,14 @@ app.post("/api/auth/login", async (req, res) => {
     console.log("Con un Token: " + authToken);
     const full_name = dbUser.firstname + " " + dbUser.lastname;
     const user = {
+      id: dbUser.id,
       username: dbUser.username,
       email: dbUser.email,
       displayName: full_name,
       source: "mysql",
       auth_token: authToken,
+      roles: roles,
+      isTeacherOrStudent,
     };
 
     req.session.user = user;
@@ -618,6 +639,7 @@ app.post("/api/auth/login", async (req, res) => {
     res.json({
       success: true,
       user: user,
+      redirectTo,
       message: "Login exitoso",
     });
   } catch (error) {
@@ -1463,7 +1485,7 @@ app.post("/api/geofences/check", async (req, res) => {
     for (const row of rows) {
       try {
         const coordinates = JSON.parse(row.coordinates);
-                
+
         if (!Array.isArray(coordinates)) {
           console.error(
             "Formato de coordenadas inválido para geocerca:",
@@ -1535,6 +1557,29 @@ app.delete("/api/geofences/:id", async (req, res) => {
 });
 
 console.log("✅ API de Geocercas configurada");
+
+//APIS DE ROLES
+app.get("/api/users/:userId/roles", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const [roles] = await pool.execute(
+      `
+      SELECT r.id as roleid, r.shortname 
+      FROM mdl_role_assignments ra
+      JOIN mdl_role r ON ra.roleid = r.id
+      WHERE ra.userid = ?
+    `,
+      [userId]
+    );
+
+    res.json(roles);
+  } catch (error) {
+    console.error("Error obteniendo roles:", error);
+    res.status(500).json({ error: "Error al obtener roles" });
+  }
+});
+console.log("✅ API de Roles configurada");
 
 // ===== INICIALIZACIÓN =====
 

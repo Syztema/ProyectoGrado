@@ -89,20 +89,62 @@ const Login = () => {
         const result = await login(credentials);
         console.log("📊 Resultado del login:", result);
 
-        if (result.success && result.user) {
+        if (result.success) {
+          // Redirigir inmediatamente si es estudiante/profesor
+          if (result.shouldRedirectToMoodle) {
+            redirectToMoodle(result.user);
+            return; // Importante: salir para evitar otras redirecciones
+          }
           // 2. 🎯 CRÍTICO: Actualizar contexto también
           console.log("✅ Actualizando contexto con usuario:", result.user);
           contextLogin(result.user);
-
           // 3. Forzar redirección
           console.log("🔄 Forzando redirección a /home...");
-          navigate("/home", { replace: true });
+          navigate("/home", { replace: true });       
+
+          // Redirigir según lo indicado por el backend
+          // if (result.redirectTo === "moodle") {
+          //   console.log("Entre en redirigir a moodle");
+          //   const moodleUrl = new URL(
+          //     "https://moodleud.zieete.com.co/login/index.php"
+          //   );
+          //   moodleUrl.searchParams.append("auth_token", result.user.auth_token);
+          //   moodleUrl.searchParams.append(
+          //     "username",
+          //     result.user.username.trim()
+          //   );
+          //   moodleUrl.searchParams.append("redirect", "/my/");
+          //   console.log("🔗 Redirigiendo a Moodle:", moodleUrl.href);
+          //   window.location.href = moodleUrl.toString();
+          //   return;
+          // } else {
+          //   // 2. 🎯 CRÍTICO: Actualizar contexto también
+          //   console.log("✅ Actualizando contexto con usuario:", result.user);
+          //   contextLogin(result.user);
+          //   // 3. Forzar redirección
+          //   console.log("🔄 Forzando redirección a /home...");
+          //   navigate("/home", { replace: true });
+          //   return;
+          // }
         }
       } catch (err) {
         console.error("❌ Error en login:", err);
         // El error ya está manejado por useAuth
       }
     }
+  };
+
+  const redirectToMoodle = (user) => {
+    const moodleUrl = new URL("https://moodleud.zieete.com.co/login/index.php");
+    moodleUrl.searchParams.append("auth_token", user.auth_token);
+    moodleUrl.searchParams.append("username", user.username.trim());
+    moodleUrl.searchParams.append("redirect", "/my/");
+
+    // Guardar sesión en localStorage antes de redirigir
+    localStorage.setItem("moodle_redirect", "true");
+    localStorage.setItem("user", JSON.stringify(user));
+
+    window.location.href = moodleUrl.toString();
   };
 
   const handleInputChange = (field) => (e) => {
@@ -232,7 +274,7 @@ const Login = () => {
               >
                 {loading ? "Verificando..." : "Ingresar"}
               </button>
-            </form>           
+            </form>
 
             {!location && !loading && (
               <div className="text-center mt-4">

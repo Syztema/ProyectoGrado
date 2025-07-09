@@ -290,6 +290,69 @@ class AuthService {
       throw error;
     }
   }
+
+  async loginWithRoles(credentials) {
+    try {
+      // 1. Hacer login normal
+      const loginResult = await this.login(credentials);
+
+      if (!loginResult.success) {
+        return loginResult;
+      }
+
+      // 2. Obtener roles del usuario
+      const rolesResponse = await fetch(
+        `${this.baseURL}/api/users/${loginResult.user.id}/roles`,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+        }
+      );
+
+      if (!rolesResponse.ok) {
+        throw new Error("Error obteniendo roles del usuario");
+      }
+
+      const roles = await rolesResponse.json();
+
+      return {
+        success: true,
+        user: {
+          ...loginResult.user,
+          roles,
+        },
+      };
+    } catch (error) {
+      console.error("Error en loginWithRoles:", error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  async getUserWithRoles(userId) {
+    try {
+      const response = await fetch(
+        `${this.baseURL}/api/users/${userId}/with-roles`,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("token")}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Error al obtener información del usuario");
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Error obteniendo usuario con roles:", error);
+      throw error;
+    }
+  }
 }
 
 export const authService = new AuthService();
