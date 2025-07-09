@@ -1,42 +1,56 @@
 // src/utils/geoCheck.js
 
-// Coordenadas del polígono
-export const polygonCoordinates = [
-  [-74.19177577881777, 4.622497286638605],
-  [-74.19177577881777, 4.620544132388574],
-  [-74.1893973205417, 4.620544132388574],
-  [-74.1893973205417, 4.622497286638605],
-  [-74.19177577881777, 4.622497286638605],
-];
+import { authService } from "../services/authService";
 
+// Coordenadas del polígono
 // export const polygonCoordinates = [
-//   [-74.18794369437381, 4.621631970532704],
-//   [-74.18794369437381, 4.619219327197385],
-//   [-74.18449965521741, 4.619219327197385],
-//   [-74.18449965521741, 4.621631970532704],
-//   [-74.18794369437381, 4.621631970532704],
+//   [-74.19177577881777, 4.622497286638605],
+//   [-74.19177577881777, 4.620544132388574],
+//   [-74.1893973205417, 4.620544132388574],
+//   [-74.1893973205417, 4.622497286638605],
+//   [-74.19177577881777, 4.622497286638605],
 // ];
 
-// Función que verifica si un punto está dentro del polígono
-export function isWithinArea(userLat, userLng) {
-  const x = userLng;
-  const y = userLat;
+// Función que verifica si un punto está dentro de alguna geocerca
+export async function isWithinArea(userLat, userLng) {
+  try {
+    // Validación básica de coordenadas en el frontend también
+    if (
+      typeof userLat !== "number" ||
+      typeof userLng !== "number" ||
+      isNaN(userLat) ||
+      isNaN(userLng)
+    ) {
+      console.error("❌ Coordenadas inválidas:", { userLat, userLng });
+      return false;
+    }
 
-  let inside = false;
-  for (
-    let i = 0, j = polygonCoordinates.length - 1;
-    i < polygonCoordinates.length;
-    j = i++
-  ) {
-    const xi = polygonCoordinates[i][0],
-      yi = polygonCoordinates[i][1];
-    const xj = polygonCoordinates[j][0],
-      yj = polygonCoordinates[j][1];
+    const result = await authService.checkGeofence(userLat, userLng);
 
-    const intersect =
-      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-    if (intersect) inside = !inside;
+    if (!result.success) {
+      console.error("❌ Error en verificación de geocerca:", result.error);
+      return false;
+    }
+
+    if (result.geofences.length === 0) {
+      console.warn("⚠️ No hay geocercas definidas en el sistema");
+      return false;
+    }
+
+    return result.isInside;
+  } catch (error) {
+    console.error("❌ Error inesperado verificando geocerca:", error);
+    return false;
   }
+}
 
-  return inside;
+// Función para obtener todas las geocercas (opcional, para mostrar en mapa)
+export async function getGeofences() {
+  try {
+    const response = await authService.getGeofences();
+    return response;
+  } catch (error) {
+    console.error("Error obteniendo geocercas:", error);
+    return [];
+  }
 }

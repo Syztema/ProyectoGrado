@@ -280,6 +280,26 @@ function validatePasswordWithPython(password, storedHash, callback) {
   }
 }
 
+// Función para verificar si un punto está dentro de un polígono
+function isPointInPolygon(point, polygon) {
+  const x = point[0];
+  const y = point[1];
+  let inside = false;
+
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0];
+    const yi = polygon[i][1];
+    const xj = polygon[j][0];
+    const yj = polygon[j][1];
+
+    const intersect =
+      yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+
+  return inside;
+}
+
 // Middleware para verificar autenticación
 const requireAuth = (req, res, next) => {
   if (req.session && req.session.user) {
@@ -1417,48 +1437,51 @@ app.post("/api/geofences/check", async (req, res) => {
   try {
     const { lat, lng } = req.body;
 
-    if (!lat || !lng) {
-      return res.status(400).json({ error: "Coordenadas inválidas" });
+    // Validación de coordenadas
+    if (
+      typeof lat !== "number" ||
+      typeof lng !== "number" ||
+      isNaN(lat) ||
+      isNaN(lng)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Coordenadas inválidas",
+        isInside: false,
+        geofences: [],
+      });
     }
 
     console.log(`📍 Verificando ubicación: ${lat}, ${lng}`);
 
-    // Obtener todas las geocercas
+    // Obtener geocercas
     const [rows] = await pool.execute(
       "SELECT id, name, coordinates FROM geofences"
     );
 
-    // Función para verificar si un punto está dentro de un polígono
-    const isPointInPolygon = (point, polygon) => {
-      const x = point[0];
-      const y = point[1];
-      let inside = false;
-
-      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i][0];
-        const yi = polygon[i][1];
-        const xj = polygon[j][0];
-        const yj = polygon[j][1];
-
-        const intersect =
-          yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-
-        if (intersect) inside = !inside;
-      }
-
-      return inside;
-    };
-
-    // Verificar cada geocerca
     const matchingGeofences = [];
-
     for (const row of rows) {
-      const coordinates = JSON.parse(row.coordinates);
-      if (isPointInPolygon([lng, lat], coordinates)) {
-        matchingGeofences.push({
-          id: row.id,
-          name: row.name,
-        });
+      try {
+        const coordinates = JSON.parse(row.coordinates);
+                
+        if (!Array.isArray(coordinates)) {
+          console.error(
+            "Formato de coordenadas inválido para geocerca:",
+            row.id
+          );
+          continue;
+        }
+
+        // Verificar punto en polígono
+        if (isPointInPolygon([lng, lat], coordinates)) {
+          matchingGeofences.push({
+            id: row.id,
+            name: row.name,
+          });
+        }
+      } catch (error) {
+        console.error(`Error procesando geocerca ${row.id}:`, error);
+        continue;
       }
     }
 
@@ -1467,12 +1490,19 @@ app.post("/api/geofences/check", async (req, res) => {
     );
 
     res.json({
+      success: true,
       isInside: matchingGeofences.length > 0,
       geofences: matchingGeofences,
+      coordinatesChecked: { lat, lng },
     });
   } catch (error) {
     console.error("❌ Error al verificar ubicación:", error);
-    res.status(500).json({ error: "Error al verificar la ubicación" });
+    res.status(500).json({
+      success: false,
+      error: "Error interno al verificar ubicación",
+      isInside: false,
+      geofences: [],
+    });
   }
 });
 

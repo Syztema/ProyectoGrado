@@ -1,14 +1,14 @@
 // src/hooks/useLocationValidation.js
-import { useState, useCallback, useEffect } from 'react';
-import { isWithinArea } from '../utils/geoCheck';
-import { useGeolocation } from './useGeolocation';
+import { useState, useCallback, useEffect } from "react";
+import { isWithinArea } from "../utils/geoCheck";
+import { useGeolocation } from "./useGeolocation";
 
 export const useLocationValidation = (options = {}) => {
   const {
     autoValidate = false,
     onLocationChange = null,
     onValidationChange = null,
-    validateOnMount = false
+    validateOnMount = false,
   } = options;
 
   const { location, getCurrentPosition, loading, error } = useGeolocation();
@@ -17,44 +17,57 @@ export const useLocationValidation = (options = {}) => {
   const [lastValidation, setLastValidation] = useState(null);
 
   // Función para validar una ubicación específica
-  const validateLocation = useCallback((lat, lng) => {
-    const valid = isWithinArea(lat, lng);
-    const timestamp = new Date().toISOString();
-    
-    const validationResult = {
-      lat,
-      lng,
-      isValid: valid,
-      timestamp,
-      accuracy: null
-    };
+  const validateLocation = useCallback(
+    async (lat, lng) => {
+      try {
+        const valid = await isWithinArea(lat, lng);
+        const timestamp = new Date().toISOString();
 
-    setIsValid(valid);
-    setLastValidation(validationResult);
-    
-    // Agregar al historial (mantener solo los últimos 10)
-    setValidationHistory(prev => {
-      const newHistory = [validationResult, ...prev];
-      return newHistory.slice(0, 10);
-    });
+        const validationResult = {
+          lat,
+          lng,
+          isValid: valid,
+          timestamp,
+          accuracy: null,
+        };
 
-    // Callback de cambio de validación
-    if (onValidationChange) {
-      onValidationChange(validationResult);
-    }
+        setIsValid(valid);
+        setLastValidation(validationResult);
 
-    return validationResult;
-  }, [onValidationChange]);
+        setValidationHistory((prev) => {
+          const newHistory = [validationResult, ...prev];
+          return newHistory.slice(0, 10);
+        });
+
+        if (onValidationChange) {
+          onValidationChange(validationResult);
+        }
+
+        return validationResult;
+      } catch (error) {
+        console.error("Validation error:", error);
+        return {
+          lat,
+          lng,
+          isValid: false,
+          timestamp: new Date().toISOString(),
+          accuracy: null,
+          error: error.message,
+        };
+      }
+    },
+    [onValidationChange]
+  );
 
   // Función para validar la ubicación actual
   const validateCurrentLocation = useCallback(async () => {
     try {
       const currentLocation = await getCurrentPosition();
       const result = validateLocation(currentLocation.lat, currentLocation.lng);
-      
+
       // Agregar precisión al resultado
       result.accuracy = currentLocation.accuracy;
-      
+
       return result;
     } catch (err) {
       throw new Error(`Error obteniendo ubicación: ${err.message}`);
@@ -67,7 +80,7 @@ export const useLocationValidation = (options = {}) => {
       return null;
     }
 
-    const validCount = validationHistory.filter(v => v.isValid).length;
+    const validCount = validationHistory.filter((v) => v.isValid).length;
     const totalCount = validationHistory.length;
     const validPercentage = (validCount / totalCount) * 100;
 
@@ -77,7 +90,7 @@ export const useLocationValidation = (options = {}) => {
       invalidValidations: totalCount - validCount,
       validPercentage: Math.round(validPercentage),
       lastValidation: validationHistory[0],
-      firstValidation: validationHistory[validationHistory.length - 1]
+      firstValidation: validationHistory[validationHistory.length - 1],
     };
   }, [validationHistory]);
 
@@ -114,25 +127,25 @@ export const useLocationValidation = (options = {}) => {
     location,
     loading,
     error,
-    
+
     // Estado de validación
     isValid,
     lastValidation,
     validationHistory,
-    
+
     // Funciones
     validateCurrentLocation,
     validateLocation,
     getCurrentPosition,
-    
+
     // Utilidades
     getLocationStats,
     clearHistory,
-    
+
     // Estado computado
     hasValidationHistory: validationHistory.length > 0,
     isCurrentlyValid: isValid === true,
     isCurrentlyInvalid: isValid === false,
-    hasNeverValidated: isValid === null
+    hasNeverValidated: isValid === null,
   };
 };
