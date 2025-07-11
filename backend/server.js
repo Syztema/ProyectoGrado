@@ -280,6 +280,65 @@ function validatePasswordWithPython(password, storedHash, callback) {
   }
 }
 
+const scriptPath2 = path.join(__dirname, "./scripts/passwordValidator.py");
+function generateMoodlePassword(password) {
+  return new Promise((resolve, reject) => {
+    const scriptPath2 = path.join(__dirname, "./scripts/passwordGenerator.py");
+
+    try {
+      const input = JSON.stringify({
+        password: password,
+      });
+
+      const pythonProcess = spawn("python", [scriptPath2]);
+
+      let stdoutData = "";
+      let stderrData = "";
+
+      pythonProcess.stdout.on("data", (data) => {
+        stdoutData += data.toString();
+      });
+
+      pythonProcess.stderr.on("data", (data) => {
+        stderrData += data.toString();
+      });
+
+      pythonProcess.on("close", (code) => {
+        if (code !== 0) {
+          console.error(
+            `Python script exited with code ${code}. Error: ${stderrData}`
+          );
+          return reject(new Error(`Python script failed: ${stderrData}`));
+        }
+
+        try {
+          const result = JSON.parse(stdoutData.trim());
+
+          if (result.error) {
+            return reject(new Error(result.error));
+          }
+
+          if (result.hash) {
+            return resolve(result.hash);
+          }
+
+          reject(new Error("No hash returned from Python script"));
+        } catch (parseError) {
+          reject(
+            new Error(`Failed to parse Python output: ${parseError.message}`)
+          );
+        }
+      });
+
+      pythonProcess.stdin.write(input);
+      pythonProcess.stdin.end();
+    } catch (err) {
+      console.error("Error spawning Python process:", err);
+      reject(err);
+    }
+  });
+}
+
 // Función para verificar si un punto está dentro de un polígono
 function isPointInPolygon(point, polygon) {
   const x = point[0];
@@ -530,8 +589,8 @@ app.post("/api/auth/login", async (req, res) => {
     console.log("🔑 Verificando credenciales...");
 
     const [rows] = await pool.execute(
-      "SELECT * FROM mdl_user WHERE username = ? AND lastlogin >= UNIX_TIMESTAMP() - ?",
-      [username, 90 * 24 * 60 * 60]
+      "SELECT * FROM mdl_user WHERE username = ? AND suspended = 0",
+      [username]
     );
 
     if (rows.length === 0) {
@@ -576,7 +635,7 @@ app.post("/api/auth/login", async (req, res) => {
     // Obtener roles del usuario
     const [roles] = await pool.execute(
       `
-      SELECT r.id as roleid, r.shortname 
+      SELECT r.id as roleid, r.shortname, ra.contextid  
       FROM mdl_role_assignments ra
       JOIN mdl_role r ON ra.roleid = r.id
       WHERE ra.userid = ?
@@ -584,9 +643,20 @@ app.post("/api/auth/login", async (req, res) => {
       [dbUser.id]
     );
 
-    // Determinar si es profesor/estudiante
-    const isTeacherOrStudent = roles.some((r) => [4, 5].includes(r.roleid));
-    const redirectTo = isTeacherOrStudent ? "moodle" : "home";
+    // Verificar si el usuario es administrador (roleid = 1)
+    const isAdmin = roles.some((r) => r.roleid === 1);
+
+    // Verificar si el usuario es docente o estudiante (roleid = 3 o 5), sin importar el contexto
+    const isTeacherOrStudent = roles.some((r) => [3, 5].includes(r.roleid));
+
+    // Lógica de redirección: los administradores van a "home", docentes y estudiantes van a "moodle"
+    // Si un usuario tiene ambos roles (admin y docente/estudiante), la prioridad la tiene el rol de admin
+    const redirectTo = isAdmin
+      ? "home"
+      : isTeacherOrStudent
+      ? "moodle"
+      : "home";
+
     console.log(`🎯 Roles del usuario: ${JSON.stringify(roles)}`);
     console.log(`🎯 Redirección: ${redirectTo}`); // Nuevo log
 
@@ -867,15 +937,15 @@ app.get("/api/admin/devices", requireAdmin, async (req, res) => {
 
 // Crear usuario
 app.post("/api/admin/users", requireAdmin, async (req, res) => {
-  const { username, password, full_name, email } = req.body;
+  const { username, password, firstname, lastname, email, roleid } = req.body;
 
   try {
     console.log("➕ Creando usuario:", username);
 
-    if (!username || !password) {
-      return res
-        .status(400)
-        .json({ error: "Usuario y contraseña son requeridos" });
+    if (!username || !password || !firstname || !lastname) {
+      return res.status(400).json({
+        error: "Usuario, contraseña, nombre y apellido son requeridos",
+      });
     }
 
     // Verificar si el usuario ya existe
@@ -888,28 +958,89 @@ app.post("/api/admin/users", requireAdmin, async (req, res) => {
       return res.status(409).json({ error: "El usuario ya existe" });
     }
 
-    // Encriptar contraseña
-    let hashedPassword;
+    // Valores por defecto para un usuario de Moodle
+    const now = Math.floor(Date.now() / 1000); // Timestamp Unix
+    const defaultEmail = email || `${username}@example.com`;
+
+    // Generar hash de contraseña compatible con Moodle usando Python
+    let passwordHash;
     try {
-      hashedPassword = await bcrypt.hash(password, 10);
-    } catch (error) {
-      console.warn("⚠️ Error con bcrypt, usando texto plano");
-      hashedPassword = password;
+      passwordHash = await generateMoodlePassword(password);
+      console.log("Hash generado:", passwordHash);
+    } catch (hashError) {
+      console.error("Error generando hash de contraseña:", hashError);
+      return res
+        .status(500)
+        .json({ error: "Error generando hash de contraseña" });
     }
 
     // Crear usuario
     const [result] = await pool.execute(
       `
-      INSERT INTO mdl_user (username, password, full_name, email, is_active, created_at)
-      VALUES (?, ?, ?, ?, TRUE, NOW())
-    `,
-      [username, hashedPassword, full_name, email || username]
+      INSERT INTO mdl_user (
+        username, password, firstname, lastname, email, 
+        auth, confirmed, mnethostid, timecreated, timemodified,
+        city, country, lang, calendartype, maildisplay, mailformat, 
+        maildigest, autosubscribe, trackforums, deleted
+      ) VALUES (
+        ?, ?, ?, ?, ?, 
+        'manual', 1, 1, ?, ?,
+        '', '', 'es', 'gregorian', 2, 1, 
+        0, 1, 0, 0
+      )
+      `,
+      [username, passwordHash, firstname, lastname, defaultEmail, now, now]
     );
 
-    console.log("✅ Usuario creado con ID:", result.insertId);
+    const userId = result.insertId;
+    // Asignar rol al usuario si se especificó
+    if (roleid) {
+      try {
+        // Primero, necesitamos determinar el contexto adecuado
+        // Para un rol a nivel de sistema (como administrador), usamos el contexto 1
+        const contextId = 1; // Contexto del sistema
+
+        // Obtener el ID del usuario que está realizando la acción (el administrador actual)
+        // Accedemos al ID del usuario desde la sesión
+        const modifierId = req.session.user ? req.session.user.id : 2;
+        console.log("👤 Usuario modificador:", {
+          id: modifierId,
+          name: req.session.user
+            ? req.session.user.displayName || req.session.user.username
+            : "Unknown",
+        });
+
+        await pool.execute(
+          `
+          INSERT INTO mdl_role_assignments 
+          (roleid, contextid, userid, timemodified, modifierid, component, itemid, sortorder)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          [
+            roleid, // ID del rol
+            contextId, // ID del contexto
+            userId, // ID del usuario creado
+            now, // Timestamp actual
+            modifierId, // ID del usuario que asigna el rol
+            "", // Componente (vacío por defecto)
+            0, // ItemID (0 por defecto)
+            0, // SortOrder (0 por defecto)
+          ]
+        );
+
+        console.log(
+          `✅ Rol ${roleid} asignado al usuario ${userId} por el modificador ${modifierId}`
+        );
+      } catch (roleError) {
+        console.error("⚠️ Error asignando rol:", roleError);
+        // No fallamos la creación del usuario si falla la asignación de rol
+      }
+    }
+
+    console.log("✅ Usuario creado con ID:", userId);
     res.json({
       success: true,
-      userId: result.insertId,
+      userId: userId,
       message: "Usuario creado exitosamente",
     });
   } catch (error) {
@@ -917,8 +1048,168 @@ app.post("/api/admin/users", requireAdmin, async (req, res) => {
     if (error.code === "ER_DUP_ENTRY") {
       res.status(409).json({ error: "El usuario ya existe" });
     } else {
-      res.status(500).json({ error: "Error interno del servidor" });
+      res
+        .status(500)
+        .json({ error: "Error interno del servidor: " + error.message });
     }
+  }
+});
+
+// Editar usuario
+app.get("/api/admin/users/:id", requireAdmin, async (req, res) => {
+  const userId = req.params.id;
+  console.log("Obteniendo datos del usuario:", userId);
+
+  try {
+    // Obtener datos básicos del usuario
+    const [userRows] = await pool.execute(
+      `SELECT id, username, firstname, lastname, email 
+       FROM mdl_user 
+       WHERE id = ? AND deleted = 0`,
+      [userId]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const user = userRows[0];
+
+    // Obtener el rol del usuario (asumiendo que queremos el rol a nivel de sistema)
+    const [roleRows] = await pool.execute(
+      `SELECT roleid 
+       FROM mdl_role_assignments 
+       WHERE userid = ? AND contextid = 1`,
+      [userId]
+    );
+
+    // Añadir el roleid si existe
+    if (roleRows.length > 0) {
+      user.roleid = roleRows[0].roleid.toString();
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error("Error obteniendo datos del usuario:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+app.put("/api/admin/users/:id", requireAdmin, async (req, res) => {
+  const userId = req.params.id;
+  const { firstname, lastname, email, password, roleid } = req.body;
+  console.log("Actualizando usuario:", userId);
+
+  try {
+    console.log("🔄 Actualizando usuario ID:", userId);
+
+    // Verificar si el usuario existe
+    const [userCheck] = await pool.execute(
+      "SELECT id FROM mdl_user WHERE id = ? AND deleted = 0",
+      [userId]
+    );
+
+    if (userCheck.length === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    // Preparar la actualización de datos básicos
+    const now = Math.floor(Date.now() / 1000); // Timestamp Unix
+    let updateFields = [];
+    let updateParams = [];
+
+    // Añadir campos a actualizar
+    if (firstname) {
+      updateFields.push("firstname = ?");
+      updateParams.push(firstname);
+    }
+
+    if (lastname) {
+      updateFields.push("lastname = ?");
+      updateParams.push(lastname);
+    }
+
+    if (email) {
+      updateFields.push("email = ?");
+      updateParams.push(email);
+    }
+
+    // Siempre actualizar timemodified
+    updateFields.push("timemodified = ?");
+    updateParams.push(now);
+
+    // Añadir el ID del usuario al final de los parámetros
+    updateParams.push(userId);
+
+    // Actualizar datos básicos del usuario
+    if (updateFields.length > 0) {
+      await pool.execute(
+        `UPDATE mdl_user SET ${updateFields.join(", ")} WHERE id = ?`,
+        updateParams
+      );
+    }
+
+    // Si se proporcionó una nueva contraseña, actualizarla
+    if (password && password.trim() !== "") {
+      try {
+        // Generar hash de contraseña compatible con Moodle usando Python
+        const passwordHash = await generateMoodlePassword(password);
+
+        await pool.execute("UPDATE mdl_user SET password = ? WHERE id = ?", [
+          passwordHash,
+          userId,
+        ]);
+
+        console.log("✅ Contraseña actualizada para el usuario:", userId);
+      } catch (hashError) {
+        console.error("Error actualizando contraseña:", hashError);
+        return res.status(500).json({ error: "Error actualizando contraseña" });
+      }
+    }
+
+    // Si se proporcionó un rol, actualizar la asignación de rol
+    if (roleid) {
+      try {
+        // Primero, verificar si ya tiene un rol asignado a nivel de sistema
+        const [existingRole] = await pool.execute(
+          "SELECT id FROM mdl_role_assignments WHERE userid = ? AND contextid = 1",
+          [userId]
+        );
+
+        const modifierId = req.session.user ? req.session.user.id : 2;
+
+        if (existingRole.length > 0) {
+          // Actualizar rol existente
+          await pool.execute(
+            "UPDATE mdl_role_assignments SET roleid = ?, timemodified = ?, modifierid = ? WHERE id = ?",
+            [roleid, now, modifierId, existingRole[0].id]
+          );
+        } else {
+          // Crear nueva asignación de rol
+          await pool.execute(
+            `INSERT INTO mdl_role_assignments 
+            (roleid, contextid, userid, timemodified, modifierid, component, itemid, sortorder)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [roleid, 1, userId, now, modifierId, "", 0, 0]
+          );
+        }
+
+        console.log(`✅ Rol ${roleid} actualizado para el usuario ${userId}`);
+      } catch (roleError) {
+        console.error("Error actualizando rol:", roleError);
+        // No fallamos la actualización del usuario si falla la actualización del rol
+      }
+    }
+
+    console.log("✅ Usuario actualizado con éxito:", userId);
+    res.json({
+      success: true,
+      message: "Usuario actualizado exitosamente",
+    });
+  } catch (error) {
+    console.error("❌ Error actualizando usuario:", error);
+    res
+      .status(500)
+      .json({ error: "Error interno del servidor: " + error.message });
   }
 });
 
@@ -929,41 +1220,49 @@ app.post("/api/admin/users/:userId/toggle", requireAdmin, async (req, res) => {
   try {
     console.log("🔄 Cambiando estado del usuario:", userId);
 
-    // Obtener estado actual
-    const [user] = await pool.execute(
-      "SELECT id, username, is_active FROM users WHERE id = ?",
+    // Obtener estado actual en la tabla mdl_user
+    const [users] = await pool.execute(
+      "SELECT id, username, suspended FROM mdl_user WHERE id = ? AND deleted = 0",
       [userId]
     );
 
-    if (user.length === 0) {
+    if (users.length === 0) {
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
-    const currentUser = user[0];
-    const newStatus = !currentUser.is_active;
+    const currentUser = users[0];
+    // En Moodle, suspended es 0 para activo, 1 para suspendido
+    const newSuspendedStatus = currentUser.suspended === 1 ? 0 : 1;
+    const action = newSuspendedStatus === 1 ? "desactivado" : "activado";
 
-    // Actualizar estado
-    await pool.execute("UPDATE users SET is_active = ? WHERE id = ?", [
-      newStatus,
-      userId,
-    ]);
+    // Actualizar estado en la tabla mdl_user
+    await pool.execute(
+      "UPDATE mdl_user SET suspended = ?, timemodified = ? WHERE id = ?",
+      [newSuspendedStatus, Math.floor(Date.now() / 1000), userId]
+    );
 
-    // Si se desactiva el usuario, revocar sus dispositivos
-    if (!newStatus) {
-      await pool.execute(
-        "UPDATE authorized_devices SET is_active = FALSE WHERE username = ?",
-        [currentUser.username]
-      );
+    // Si se desactiva el usuario, también podrías revocar sus dispositivos si lo necesitas
+    if (newSuspendedStatus === 1) {
+      // Esta parte depende de tu implementación de dispositivos
+      // Si tienes una tabla de dispositivos relacionada con los usuarios de Moodle
+      try {
+        await pool.execute(
+          "UPDATE authorized_devices SET is_active = FALSE WHERE username = ?",
+          [currentUser.username]
+        );
+        console.log(
+          `✅ Dispositivos del usuario ${currentUser.username} revocados`
+        );
+      } catch (deviceError) {
+        console.error("⚠️ Error revocando dispositivos:", deviceError);
+        // No fallamos la operación principal si esto falla
+      }
     }
 
-    console.log(
-      `✅ Usuario ${currentUser.username} ${
-        newStatus ? "activado" : "desactivado"
-      }`
-    );
+    console.log(`✅ Usuario ${currentUser.username} ${action}`);
     res.json({
       success: true,
-      message: `Usuario ${newStatus ? "activado" : "desactivado"} exitosamente`,
+      message: `Usuario ${action} exitosamente`,
     });
   } catch (error) {
     console.error("❌ Error actualizando usuario:", error);

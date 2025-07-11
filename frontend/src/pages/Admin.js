@@ -37,6 +37,8 @@ const Admin = () => {
   const [selectedGeofence, setSelectedGeofence] = useState(null);
   const [showGeofenceList, setShowGeofenceList] = useState(false);
   const [loadingGeofences, setLoadingGeofences] = useState(false);
+  //USUARIOS
+  const [currentUserId, setCurrentUserId] = useState("");
 
   //Regreso a Home
   const handleGoHome = () => {
@@ -288,11 +290,26 @@ const Admin = () => {
 
   const handleCreateUser = async (userData) => {
     try {
+      console.log("Datos que se envían al servidor:", userData);
+
+      // Extraer los datos del formulario
+      const userDataToSend = {
+        username: userData.username,
+        password: userData.password,
+        firstname: userData.firstname,
+        lastname: userData.lastname,
+        email: userData.email || `${userData.username}@example.com`, // Email por defecto si no se proporciona
+        roleid: userData.rol, // Asegúrate de que el nombre del campo coincida con tu formulario
+      };
+
+      // Depurar los datos procesados
+      console.log("Datos procesados para enviar:", userDataToSend);
+
       const response = await fetch("http://localhost:3001/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(userData),
+        body: JSON.stringify(userDataToSend),
       });
 
       const result = await response.json();
@@ -311,8 +328,116 @@ const Admin = () => {
     }
   };
 
+  const handleEditUser = async (userData) => {
+    try {
+      // Depurar los datos que se están enviando
+      console.log(
+        "Datos que se envían al servidor para actualización:",
+        userData
+      );
+
+      // Verificar que el ID no esté vacío
+      if (!userData.id) {
+        alert("Error: ID de usuario no válido");
+        return;
+      }
+
+      const response = await fetch(
+        `http://localhost:3001/api/admin/users/${userData.id}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(userData),
+        }
+      );
+
+      // Verificar si la respuesta es HTML (error)
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("text/html")) {
+        throw new Error(
+          `Error del servidor: ${response.status} ${response.statusText}`
+        );
+      }
+
+      const result = await response.json();
+
+      if (response.ok) {
+        await loadUsers(); // Recargar la lista de usuarios
+        setShowModal(false);
+        setFormData({});
+        alert("Usuario actualizado exitosamente");
+      } else {
+        alert("Error actualizando usuario: " + result.error);
+      }
+    } catch (error) {
+      console.error("Error actualizando usuario:", error);
+      alert("Error actualizando usuario: " + error.message);
+    }
+  };
+
+  const openEditUserModal = async (userId) => {
+    try {
+      // Cargar los datos del usuario
+      const response = await fetch(
+        `http://localhost:3001/api/admin/users/${userId}`,
+        {
+          method: "GET",
+          credentials: "include",
+        }
+      );
+
+      if (response.ok) {
+        const userData = await response.json();
+
+        // Establecer el ID del usuario actual que estamos editando
+        setCurrentUserId(userId);
+
+        // Establecer los datos del formulario
+        setFormData({
+          username: userData.username,
+          firstname: userData.firstname,
+          lastname: userData.lastname,
+          email: userData.email,
+          roleid: userData.roleid || "5", // Valor por defecto si no tiene rol
+        });
+
+        // Abrir el modal
+        setModalType("editUser");
+        setShowModal(true);
+      } else {
+        const error = await response.json();
+        alert("Error cargando datos del usuario: " + error.error);
+      }
+    } catch (error) {
+      console.error("Error cargando datos del usuario:", error);
+      alert("Error cargando datos del usuario: " + error.message);
+    }
+  };
+
+  // Cargar las geocercas al montar el componente
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
   const handleToggleUserStatus = async (userId) => {
     try {
+      // Obtener el usuario actual para determinar si está suspendido o no
+      const userToToggle = users.find((user) => user.id === userId);
+
+      if (!userToToggle) {
+        alert("Usuario no encontrado");
+        return;
+      }
+
+      // Mostrar mensaje de confirmación
+      const action = userToToggle.suspended ? "activar" : "desactivar";
+      const confirmMessage = `¿Estás seguro de que quieres ${action} al usuario ${userToToggle.username}?`;
+
+      if (!window.confirm(confirmMessage)) {
+        return; // El usuario canceló la acción
+      }
+
       const response = await fetch(
         `http://localhost:3001/api/admin/users/${userId}/toggle`,
         {
@@ -786,7 +911,7 @@ const Admin = () => {
               </button>
               <button
                 className="edit-btn"
-                onClick={() => openModal("editUser", user)}
+                onClick={() => openEditUserModal(user.id)}
               >
                 ✏️ Editar
               </button>
@@ -1580,26 +1705,40 @@ const Admin = () => {
                   handleCreateUser({
                     username: formData.get("username"),
                     password: formData.get("password"),
-                    full_name: formData.get("full_name"),
+                    firstname: formData.get("firstname"),
+                    lastname: formData.get("lastname"),
                     email: formData.get("email"),
+                    rol: formData.get("roleid"),
                   });
                 }}
               >
                 <div className="form-group">
-                  <label>Usuario (email):</label>
-                  <input type="email" name="username" required />
+                  <label>Usuario:</label>
+                  <input type="text" name="username" required />
                 </div>
                 <div className="form-group">
                   <label>Contraseña:</label>
                   <input type="password" name="password" required />
                 </div>
                 <div className="form-group">
-                  <label>Nombre completo:</label>
-                  <input type="text" name="full_name" />
+                  <label>Nombre:</label>
+                  <input type="text" name="firstname" required />
+                </div>
+                <div className="form-group">
+                  <label>Apellido:</label>
+                  <input type="text" name="lastname" required />
                 </div>
                 <div className="form-group">
                   <label>Email:</label>
                   <input type="email" name="email" />
+                </div>
+                <div className="form-group">
+                  <label form="rol">Rol:</label>
+                  <select name="roleid" id="rol">
+                    <option value="5">Estudiante</option>
+                    <option value="3">Docente</option>
+                    <option value="1">Administrativo</option>
+                  </select>
                 </div>
                 <div className="form-actions">
                   <button type="submit" className="submit-btn">
@@ -1660,16 +1799,57 @@ const Admin = () => {
                 onSubmit={(e) => {
                   e.preventDefault();
                   const formData = new FormData(e.target);
-                  // Aquí puedes agregar la lógica para editar usuario
-                  alert("Función de editar usuario en desarrollo");
+
+                  // Recopilar datos del formulario
+                  const userData = {
+                    id: currentUserId, // ID del usuario que estamos editando
+                    username: formData.get("username"),
+                    firstname: formData.get("firstname"),
+                    lastname: formData.get("lastname"),
+                    email: formData.get("email"),
+                    password: formData.get("password"), // Opcional
+                    roleid: formData.get("roleid"),
+                  };
+
+                  // Solo incluir la contraseña si se proporcionó una nueva
+                  if (!userData.password) {
+                    delete userData.password;
+                  }
+
+                  // Verificar que el ID no esté vacío
+                  if (!userData.id) {
+                    alert("Error: ID de usuario no válido");
+                    return;
+                  }
+
+                  handleEditUser(userData);
                 }}
               >
                 <div className="form-group">
-                  <label>Nombre completo:</label>
+                  <label>Usuario:</label>
                   <input
                     type="text"
-                    name="full_name"
-                    defaultValue={formData.full_name || ""}
+                    name="username"
+                    defaultValue={formData.username || ""}
+                    readOnly // El nombre de usuario no debe cambiarse
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Nombre:</label>
+                  <input
+                    type="text"
+                    name="firstname"
+                    defaultValue={formData.firstname || ""}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Apellido:</label>
+                  <input
+                    type="text"
+                    name="lastname"
+                    defaultValue={formData.lastname || ""}
+                    required
                   />
                 </div>
                 <div className="form-group">
@@ -1683,6 +1863,18 @@ const Admin = () => {
                 <div className="form-group">
                   <label>Nueva contraseña (opcional):</label>
                   <input type="password" name="password" />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="rol">Rol:</label>
+                  <select
+                    name="roleid"
+                    id="rol"
+                    defaultValue={formData.roleid || "5"}
+                  >
+                    <option value="5">Estudiante</option>
+                    <option value="3">Docente</option>
+                    <option value="1">Administrativo</option>
+                  </select>
                 </div>
                 <div className="form-actions">
                   <button type="submit" className="submit-btn">

@@ -87,19 +87,13 @@ export const useAuth = () => {
         }
 
         // Determinar redirección antes de actualizar estado
-        const shouldRedirectToMoodle = authResult.user.roles.some((r) =>
-          [4, 5].includes(r.roleid)
+        const isAdmin = authResult.user.roles.some((r) => r.roleid === 1);
+        const isTeacherOrStudent = authResult.user.roles.some((r) =>
+          [3, 5].includes(r.roleid)
         );
 
-        // Verificar redirección
-        // if (!authResult.redirectTo) {
-        //   console.warn("⚠️ No se recibió redirectTo, determinando desde roles");
-        //   authResult.redirectTo = authResult.user?.roles?.some((r) =>
-        //     [4, 5].includes(r.roleid)
-        //   )
-        //     ? "moodle"
-        //     : "home";
-        // }
+        // Si el usuario es admin, no redirigir a Moodle incluso si también tiene rol de docente/estudiante
+        const shouldRedirectToMoodle = !isAdmin && isTeacherOrStudent;
 
         setUser(authResult.user);
         setAuthStep("success");
