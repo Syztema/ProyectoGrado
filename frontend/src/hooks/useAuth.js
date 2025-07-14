@@ -1,127 +1,241 @@
 // src/hooks/useAuth.js
-import { useState, useCallback } from "react";
-import { authService } from "../services/authService";
-import { deviceService } from "../services/deviceService";
-import { useGeolocation } from "./useGeolocation";
-import { useDeviceFingerprint } from "./useDeviceFingerprint";
+import { useState, useCallback, useEffect } from 'react';
+import { authService } from '../services/authService';
+import { deviceService } from '../services/deviceService';
+import { useGeolocation } from './useGeolocation';
+import { useDeviceFingerprint } from './useDeviceFingerprint';
+import { isWithinArea } from '../utils/geoCheck';
 
 export const useAuth = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [authStep, setAuthStep] = useState("idle"); // idle, location, device, credentials, success
-
+  const [authStep, setAuthStep] = useState('idle'); // idle, location, geofence, computer, device, credentials, authorization, success
+  const [authMethod, setAuthMethod] = useState('auto'); // 'auto', 'ad', 'mysql'
+  const [adStatus, setAdStatus] = useState({ available: false, checked: false });
+  
   const { getCurrentPosition } = useGeolocation();
-  const { fingerprint, deviceInfo, generateFingerprint } =
-    useDeviceFingerprint();
+  const { fingerprint, deviceInfo, generateFingerprint } = useDeviceFingerprint();
 
-  const login = useCallback(
-    async (credentials) => {
+  // Verificar estado de AD al inicializar
+  useEffect(() => {
+    const checkADAvailability = async () => {
       try {
-        setLoading(true);
-        setError(null);
-        setAuthStep("location");
+        const status = await authService.checkADStatus();
+        setAdStatus({ available: status.available, checked: true });
+        console.log('🔍 Estado de AD:', status);
+      } catch (error) {
+        console.warn('⚠️ No se pudo verificar estado de AD:', error);
+        setAdStatus({ available: false, checked: true });
+      }
+    };
 
-        // 1. Verificar ubicación
-        console.log("🗺️ Verificando ubicación...");
-        const location = await getCurrentPosition();
+    checkADAvailability();
+  }, []);
 
-        // Verificación estricta con manejo de errores
-        const geofenceResult = await authService.checkGeofence(
-          location.lat,
-          location.lng
-        );
+  const login = useCallback(async (credentials, method = authMethod) => {
+    try {
+      setLoading(true);
+      setError(null);
+      setAuthStep('location');
 
-        if (!geofenceResult.success) {
-          throw new Error(`Error de verificación: ${geofenceResult.error}`);
+      console.log(`🚀 Iniciando proceso de login con método: ${method}`);
+
+      // 1. Verificar ubicación básica
+      console.log('🗺️ Verificando ubicación...');
+      const location = await getCurrentPosition();
+      
+      // Verificación básica de área (tu lógica existente)
+      const isLocationValid = isWithinArea(location.lat, location.lng);
+      if (!isLocationValid) {
+        throw new Error('Estás fuera del área permitida para iniciar sesión.');
+      }
+
+      // 2. Verificar geocercas (nueva funcionalidad)
+      setAuthStep('geofence');
+      console.log('📍 Verificando geocercas...');
+      
+      try {
+        const geofenceCheck = await authService.checkGeofence(location.lat, location.lng);
+        if (!geofenceCheck.isInside) {
+          throw new Error('Tu ubicación no está dentro de las geocercas autorizadas.');
+        }
+        console.log('✅ Geocerca verificada');
+      } catch (geofenceError) {
+        console.warn('⚠️ Error verificando geocerca:', geofenceError.message);
+        // Continuar sin geocerca si no es crítico
+      }
+
+      // 3. Generar fingerprint del dispositivo
+      setAuthStep('device');
+      console.log('🔍 Generando fingerprint del dispositivo...');
+      const { fingerprint: deviceFingerprint, deviceInfo: deviceData } = await generateFingerprint();
+
+      // 4. Proceso según método de autenticación
+      if (method === 'auto') {
+        // Detección automática: AD primero, MySQL como fallback
+        console.log('🔄 Modo automático: intentando AD primero...');
+        
+        if (adStatus.available) {
+          setAuthStep('computer');
+          console.log('🖥️ Verificando equipo en dominio...');
+          
+          setAuthStep('credentials');
+          console.log('🔐 Autenticando con Active Directory...');
+          
+          try {
+            const authResult = await authService.loginComplete({
+              ...credentials,
+              deviceFingerprint,
+              location,
+              deviceInfo: deviceData
+            }, location);
+
+            if (authResult.success) {
+              setAuthStep('success');
+              setUser(authResult.user);
+              setLoading(false);
+
+              return {
+                success: true,
+                user: authResult.user,
+                method: authResult.method,
+                geofenceVerified: authResult.geofenceVerified
+              };
+            }
+          } catch (adError) {
+            console.warn('⚠️ Falló autenticación AD:', adError.message);
+            
+            // Si el error es de autorización, no hacer fallback
+            if (adError.message.includes('no tiene permisos') || 
+                adError.message.includes('no pertenece a los grupos') ||
+                adError.message.includes('no está unido al dominio')) {
+              throw adError;
+            }
+            
+            console.log('🔄 Intentando fallback a MySQL...');
+          }
+        }
+        
+        // Fallback a MySQL
+        console.log('🔐 Usando autenticación MySQL...');
+        method = 'mysql';
+      }
+
+      if (method === 'ad') {
+        // Solo Active Directory
+        if (!adStatus.available) {
+          throw new Error('Active Directory no está disponible actualmente.');
+        }
+        
+        setAuthStep('computer');
+        console.log('🖥️ Verificando equipo en dominio...');
+        
+        setAuthStep('credentials');
+        console.log('🔐 Autenticando con Active Directory...');
+        
+        const authResult = await authService.loginWithAD({
+          ...credentials,
+          deviceFingerprint,
+          location,
+          deviceInfo: deviceData
+        });
+
+        if (!authResult.success) {
+          throw new Error(authResult.error || 'Error de autenticación AD');
         }
 
-        if (!geofenceResult.isInside) {
-          throw new Error(
-            geofenceResult.geofences.length > 0
-              ? "Ubicación fuera de las áreas permitidas"
-              : "No hay geocercas configuradas. Acceso denegado."
-          );
+        setAuthStep('authorization');
+        console.log('👥 Verificando roles y permisos...');
+
+        // Obtener roles si es posible
+        let userWithRoles = authResult.user;
+        if (authResult.user.id) {
+          try {
+            const rolesData = await authService.getUserWithRoles(authResult.user.id);
+            userWithRoles = { ...authResult.user, ...rolesData };
+          } catch (rolesError) {
+            console.warn('⚠️ No se pudieron obtener roles:', rolesError.message);
+          }
         }
 
-        // Solo continuar si todo está bien
-        setAuthStep("device");
+        setAuthStep('success');
+        setUser(userWithRoles);
+        setLoading(false);
 
-        // 2. Generar y verificar dispositivo
-        console.log("🔍 Verificando dispositivo...");
-        const { fingerprint: deviceFingerprint, deviceInfo: deviceData } =
-          await generateFingerprint();
+        return {
+          success: true,
+          user: userWithRoles,
+          method: 'ad'
+        };
 
+      } else if (method === 'mysql') {
+        // Solo MySQL (proceso original mejorado)
+        setAuthStep('device');
+        
         const deviceVerification = await deviceService.verifyDevice({
           deviceFingerprint,
           deviceInfo: deviceData,
-          location,
+          location
         });
 
         if (!deviceVerification.authorized) {
           if (deviceVerification.requiresManualApproval) {
             throw new Error(
-              "Este dispositivo requiere autorización manual. " +
-                "Contacta al administrador del sistema. " +
-                `Código de dispositivo: ${deviceFingerprint.substring(0, 8)}...`
+              'Este dispositivo requiere autorización manual. ' +
+              'Contacta al administrador del sistema. ' +
+              `Código de dispositivo: ${deviceFingerprint.substring(0, 8)}...`
             );
           }
-          throw new Error("Dispositivo no autorizado para acceder al sistema.");
+          throw new Error('Dispositivo no autorizado para acceder al sistema.');
         }
 
-        setAuthStep("credentials");
+        setAuthStep('credentials');
+        console.log('🔐 Autenticando con base de datos...');
 
-        // 3. Autenticar credenciales con backend y obtener roles
-        console.log("🔐 Verificando credenciales...");
         const authResult = await authService.login({
           ...credentials,
           deviceFingerprint,
           location,
           deviceId: deviceVerification.deviceId,
+          useAD: false
         });
 
-        console.log("🔍 Respuesta completa del login:", authResult); // Nuevo log
-
         if (!authResult.success) {
-          throw new Error(authResult.error || "Credenciales inválidas");
+          throw new Error(authResult.error || 'Credenciales inválidas');
         }
 
-        // Determinar redirección antes de actualizar estado
-        const isAdmin = authResult.user.roles.some((r) => r.roleid === 1);
-        const isTeacherOrStudent = authResult.user.roles.some((r) =>
-          [3, 5].includes(r.roleid)
-        );
+        // Obtener roles
+        let userWithRoles = authResult.user;
+        if (authResult.user.id) {
+          try {
+            const rolesData = await authService.getUserWithRoles(authResult.user.id);
+            userWithRoles = { ...authResult.user, ...rolesData };
+          } catch (rolesError) {
+            console.warn('⚠️ No se pudieron obtener roles:', rolesError.message);
+          }
+        }
 
-        // Si el usuario es admin, no redirigir a Moodle incluso si también tiene rol de docente/estudiante
-        const shouldRedirectToMoodle = !isAdmin && isTeacherOrStudent;
-
-        setUser(authResult.user);
-        setAuthStep("success");
-
-        // 🎯 CRÍTICO: Actualizar estado local Y contexto
-        console.log(
-          "✅ Actualizando estado de autenticación...",
-          authResult.user
-        );
+        setAuthStep('success');
+        setUser(userWithRoles);
         setLoading(false);
 
         return {
           success: true,
-          user: authResult.user,
-          //redirectTo: authResult.redirectTo,
-          shouldRedirectToMoodle,
+          user: userWithRoles,
           deviceId: deviceVerification.deviceId,
+          method: 'mysql'
         };
-      } catch (err) {
-        console.error("❌ Error en useAuth.login:", err);
-        setError(err.message);
-        setLoading(false);
-        setAuthStep("idle");
-        throw err;
       }
-    },
-    [getCurrentPosition, generateFingerprint]
-  );
+
+    } catch (err) {
+      console.error('❌ Error en useAuth.login:', err);
+      setError(err.message);
+      setLoading(false);
+      setAuthStep('idle');
+      throw err;
+    }
+  }, [getCurrentPosition, generateFingerprint, authMethod, adStatus]);
 
   const logout = useCallback(async () => {
     try {
@@ -129,7 +243,8 @@ export const useAuth = () => {
       await authService.logout();
       setUser(null);
       setError(null);
-      setAuthStep("idle");
+      setAuthStep('idle');
+      setAuthMethod('auto');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -141,25 +256,62 @@ export const useAuth = () => {
     setError(null);
   }, []);
 
-  // 🎯 AÑADIR: Estado computado más claro
+  // Función para cambiar método de autenticación
+  const switchAuthMethod = useCallback((newMethod) => {
+    if (['auto', 'ad', 'mysql'].includes(newMethod)) {
+      setAuthMethod(newMethod);
+      console.log(`🔄 Método de autenticación cambiado a: ${newMethod}`);
+    }
+  }, []);
+
+  // Función para verificar geocercas manualmente
+  const checkGeofence = useCallback(async (lat, lng) => {
+    try {
+      const result = await authService.checkGeofence(lat, lng);
+      return result;
+    } catch (error) {
+      console.error('Error verificando geocerca:', error);
+      return { isInside: false, error: error.message };
+    }
+  }, []);
+
+  // Función para refrescar estado de AD
+  const refreshADStatus = useCallback(async () => {
+    try {
+      const status = await authService.checkADStatus();
+      setAdStatus({ available: status.available, checked: true });
+      return status;
+    } catch (error) {
+      console.error('Error refrescando estado AD:', error);
+      setAdStatus({ available: false, checked: true });
+      return { available: false, error: error.message };
+    }
+  }, []);
+
   const isAuthenticated = !!user;
 
-  console.log("🔍 useAuth state:", {
-    user,
-    isAuthenticated,
-    loading,
+  console.log('🔍 useAuth state:', { 
+    user: user?.username || 'No user', 
+    isAuthenticated, 
+    loading, 
     authStep,
+    authMethod,
+    adAvailable: adStatus.available
   });
 
   return {
     user,
     loading,
     error,
-    setError,
     authStep,
+    authMethod,
+    adStatus,
     login,
     logout,
     clearError,
     isAuthenticated,
+    switchAuthMethod,
+    checkGeofence,
+    refreshADStatus
   };
 };

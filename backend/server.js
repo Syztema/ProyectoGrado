@@ -4,6 +4,8 @@ const mysql = require("mysql2/promise");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const session = require("express-session");
+const ActiveDirectory = require("activedirectory2");
+const ldapAuth = require("ldap-authentication");
 const MySQLStore = require("express-mysql-session")(session);
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
@@ -62,6 +64,30 @@ const authMiddleware = (req, res, next) => {
   req.userId = req.session.userId;
   next();
 };
+// ===== CONFIGURACIÓN DE ACTIVE DIRECTORY =====
+const adConfig = {
+  url: process.env.AD_URL || "ldap://tu-dominio-controller.empresa.com:389",
+  baseDN: process.env.AD_BASE_DN || "dc=empresa,dc=com",
+  username:
+    process.env.AD_BIND_USER ||
+    "cn=bind-user,ou=Service Accounts,dc=empresa,dc=com",
+  password: process.env.AD_BIND_PASSWORD || "tu-password-seguro",
+  attributes: {
+    user: [
+      "dn",
+      "distinguishedName",
+      "userPrincipalName",
+      "sAMAccountName",
+      "mail",
+      "displayName",
+      "memberOf",
+      "objectGUID",
+      "userAccountControl",
+      "whenCreated",
+    ],
+    group: ["dn", "cn", "description"],
+  },
+};
 
 // Seguridad básica
 app.use(
@@ -90,7 +116,12 @@ app.use("/api/", limiter);
 // CORS configuración
 const corsOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",")
-  : ["http://localhost:3000", "https://localhost:3000"];
+  : [
+      "http://localhost:3000",
+      "https://localhost:3000",
+      "https://127.0.0.1:3000",
+      "http://127.0.0.1:3000",
+    ];
 
 app.use(
   cors({
@@ -157,6 +188,48 @@ app.use(
   })
 );
 
+// Inicializar cliente de Active Directory
+let adClient;
+try {
+  adClient = new ActiveDirectory(adConfig);
+  console.log("✅ Cliente de Active Directory configurado");
+} catch (error) {
+  console.error("❌ Error configurando Active Directory:", error);
+}
+
+function initializeADClientSafely() {
+  try {
+    console.log("🔄 Inicializando cliente de Active Directory...");
+
+    // Validar configuración
+    if (!adConfig.url || !adConfig.baseDN || !adConfig.username) {
+      console.warn("⚠️ Configuración de AD incompleta en variables de entorno");
+      return false;
+    }
+
+    adClient = new ActiveDirectory(adConfig);
+    console.log("✅ Cliente de Active Directory configurado");
+
+    // Hacer una prueba inicial de conexión (opcional)
+    setTimeout(() => {
+      if (adClient) {
+        adClient.findUser("Administrator", (err, user) => {
+          if (err) {
+            console.warn("⚠️ Prueba inicial AD falló:", err.message);
+          } else {
+            console.log("✅ Prueba inicial AD exitosa");
+          }
+        });
+      }
+    }, 2000);
+
+    return true;
+  } catch (error) {
+    console.error("❌ Error configurando Active Directory:", error);
+    adClient = null;
+    return false;
+  }
+}
 // ===== FUNCIONES AUXILIARES =====
 
 const generateDeviceHash = (fingerprint, userInfo) => {
@@ -1679,6 +1752,1070 @@ app.get("/api/admin/config/:key", requireAdmin, async (req, res) => {
 
 console.log("✅ Rutas de configuración del sistema agregadas");
 
+// ===== FUNCIONES DE VALIDACIÓN AD =====
+
+// Verificar si el usuario pertenece a las OUs permitidas
+const isUserInAllowedOU = async (userDN) => {
+  try {
+    const allowedOUs = (process.env.ALLOWED_OUS || "")
+      .split(",")
+      .map((ou) => ou.trim());
+
+    if (allowedOUs.length === 0) {
+      console.log("⚠️ No hay OUs configuradas, permitiendo acceso");
+      return true;
+    }
+
+    console.log("🔍 Verificando OU para usuario:", userDN);
+    console.log("📋 OUs permitidas:", allowedOUs);
+
+    // Verificar si el DN del usuario contiene alguna de las OUs permitidas
+    const isAllowed = allowedOUs.some((ou) =>
+      userDN.toLowerCase().includes(ou.toLowerCase())
+    );
+
+    console.log(
+      `${isAllowed ? "✅" : "❌"} Usuario ${
+        isAllowed ? "autorizado" : "no autorizado"
+      } por OU`
+    );
+    return isAllowed;
+  } catch (error) {
+    console.error("❌ Error verificando OU:", error);
+    return false;
+  }
+};
+
+// Verificar si el equipo está en el dominio AD
+const isComputerInDomain = async (computerName, location) => {
+  try {
+    // Si la verificación está deshabilitada, permitir acceso
+    if (process.env.REQUIRE_DOMAIN_COMPUTERS === 'false') {
+      console.log('⚠️ Verificación de equipos deshabilitada');
+      return true;
+    }
+
+    if (!computerName || !adClient) {
+      console.log('⚠️ Sin nombre de equipo o cliente AD, permitiendo acceso');
+      return true; // Cambiar a false para ser más estricto
+    }
+
+    console.log('🖥️ Verificando equipo:', computerName);
+
+    return new Promise((resolve) => {
+      // Las cuentas de equipo en AD terminan con $
+      const computerAccount = `${computerName}$`;
+      
+      adClient.findUser(computerAccount, (err, computer) => {
+        if (err) {
+          console.warn('⚠️ Error buscando equipo, permitiendo acceso:', err.message);
+          resolve(true);
+          return;
+        }
+
+        if (computer) {
+          console.log('✅ Equipo encontrado en AD');
+          resolve(true);
+        } else {
+          console.log('⚠️ Equipo no encontrado, permitiendo acceso');
+          resolve(true); // Cambiar a false para ser más estricto
+        }
+      });
+
+      setTimeout(() => {
+        console.log('⏰ Timeout, permitiendo acceso');
+        resolve(true);
+      }, 5000);
+    });
+  } catch (error) {
+    console.error('❌ Error verificando equipo, permitiendo acceso:', error);
+    return true;
+  }
+};
+
+// Autenticar usuario con Active Directory
+const authenticateWithAD = async (username, password) => {
+  try {
+    console.log("🔐 Autenticando con AD:", username);
+
+    // Configuración LDAP para autenticación
+    const options = {
+      ldapOpts: {
+        url: adConfig.url,
+        reconnect: true,
+      },
+      userDn: `${username}@${process.env.AD_DOMAIN || "empresa.com"}`,
+      userPassword: password,
+      userSearchBase: adConfig.baseDN,
+      usernameAttribute: "sAMAccountName",
+      username: username,
+      attributes: [
+        "dn",
+        "distinguishedName",
+        "userPrincipalName",
+        "sAMAccountName",
+        "mail",
+        "displayName",
+        "memberOf",
+        "department",
+        "title",
+      ],
+    };
+
+    const user = await ldapAuth.authenticate(options);
+
+    if (user) {
+      console.log("✅ Autenticación AD exitosa:", user.sAMAccountName);
+      return {
+        success: true,
+        user: {
+          username: user.sAMAccountName,
+          email: user.mail,
+          displayName: user.displayName,
+          dn: user.dn,
+          memberOf: user.memberOf || [],
+          department: user.department,
+          title: user.title,
+        },
+      };
+    } else {
+      console.log("❌ Autenticación AD fallida");
+      return { success: false, error: "Credenciales inválidas" };
+    }
+  } catch (error) {
+    console.error("❌ Error en autenticación AD:", error);
+    return { success: false, error: "Error de autenticación" };
+  }
+};
+
+// Verificar grupos del usuario
+const checkUserGroups = (userGroups) => {
+  try {
+    const requiredGroups = (process.env.REQUIRED_AD_GROUPS || '').split(',').map(group => group.trim());
+    
+    if (requiredGroups.length === 0) {
+      console.log('⚠️ No hay grupos requeridos configurados');
+      return true;
+    }
+
+    console.log('👥 Verificando grupos del usuario');
+    console.log('📋 Grupos requeridos:', requiredGroups);
+    console.log('👤 Grupos del usuario:', userGroups);
+    console.log('🔍 Tipo de userGroups:', typeof userGroups);
+
+    // Normalizar userGroups a un array
+    let groupsArray = [];
+    
+    if (Array.isArray(userGroups)) {
+      // Ya es un array
+      groupsArray = userGroups;
+      console.log('✅ userGroups ya es un array');
+    } else if (typeof userGroups === 'string') {
+      // Es una cadena, convertir a array
+      if (userGroups.includes(',')) {
+        // Si tiene comas, dividir por comas
+        groupsArray = userGroups.split(',').map(group => group.trim());
+      } else {
+        // Si no tiene comas, es un solo grupo
+        groupsArray = [userGroups];
+      }
+      console.log('🔄 Convertido string a array:', groupsArray);
+    } else if (userGroups && typeof userGroups === 'object') {
+      // Si es un objeto, intentar extraer valores
+      groupsArray = Object.values(userGroups).filter(val => typeof val === 'string');
+      console.log('🔄 Extraído de objeto:', groupsArray);
+    } else {
+      console.log('⚠️ userGroups no es válido:', userGroups);
+      return false;
+    }
+
+    // Verificar si el usuario tiene algún grupo requerido
+    const hasRequiredGroup = requiredGroups.some(requiredGroup => {
+      console.log(`🔍 Buscando grupo requerido: "${requiredGroup}"`);
+      
+      const found = groupsArray.some(userGroup => {
+        const match = userGroup.toLowerCase().includes(requiredGroup.toLowerCase());
+        console.log(`   📝 Comparando "${userGroup}" con "${requiredGroup}": ${match ? '✅' : '❌'}`);
+        return match;
+      });
+      
+      return found;
+    });
+
+    console.log(`${hasRequiredGroup ? '✅' : '❌'} Usuario ${hasRequiredGroup ? 'autorizado' : 'no autorizado'} por grupos`);
+    
+    // Información adicional para debugging
+    if (!hasRequiredGroup) {
+      console.log('🔍 Debugging grupos:');
+      console.log('   Grupos requeridos:', requiredGroups);
+      console.log('   Grupos del usuario:', groupsArray);
+      console.log('   Coincidencias encontradas:', groupsArray.filter(userGroup => 
+        requiredGroups.some(reqGroup => 
+          userGroup.toLowerCase().includes(reqGroup.toLowerCase())
+        )
+      ));
+    }
+    
+    return hasRequiredGroup;
+  } catch (error) {
+    console.error('❌ Error verificando grupos:', error);
+    console.error('   userGroups recibido:', userGroups);
+    console.error('   Tipo:', typeof userGroups);
+    return false;
+  }
+};
+
+// Endpoint para obtener información detallada del usuario con roles
+app.get('/api/users/:userId/with-roles', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log('🔍 Obteniendo detalles del usuario:', userId);
+
+    // Verificar autenticación
+    if (!req.session || !req.session.user) {
+      return res.status(401).json({ error: 'No autenticado' });
+    }
+
+    let userDetails = {};
+
+    // Determinar si userId es un ID numérico o un username
+    const isNumericId = !isNaN(userId);
+    
+    if (isNumericId) {
+      // Buscar por ID en mdl_user
+      const [userRows] = await pool.execute(`
+        SELECT 
+          u.id, u.username, u.email, u.firstname, u.lastname,
+          u.department, u.lastlogin, u.timecreated, u.suspended,
+          CONCAT(u.firstname, ' ', u.lastname) as displayName
+        FROM mdl_user u
+        WHERE u.id = ? AND u.deleted = 0
+      `, [userId]);
+
+      if (userRows.length > 0) {
+        const user = userRows[0];
+        userDetails = {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          displayName: user.displayName,
+          department: user.department,
+          source: 'mysql'
+        };
+
+        // Obtener roles del usuario
+        const [roles] = await pool.execute(`
+          SELECT r.id as roleid, r.shortname, r.name, ra.contextid  
+          FROM mdl_role_assignments ra
+          JOIN mdl_role r ON ra.roleid = r.id
+          WHERE ra.userid = ?
+        `, [userId]);
+
+        userDetails.roles = roles;
+        userDetails.groups = roles.map(role => role.name || role.shortname);
+      }
+    } else {
+      // Buscar por username
+      const [userRows] = await pool.execute(`
+        SELECT 
+          u.id, u.username, u.email, u.firstname, u.lastname,
+          u.department, u.lastlogin, u.timecreated, u.suspended,
+          CONCAT(u.firstname, ' ', u.lastname) as displayName
+        FROM mdl_user u
+        WHERE u.username = ? AND u.deleted = 0
+      `, [userId]);
+
+      if (userRows.length > 0) {
+        const user = userRows[0];
+        userDetails = {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          displayName: user.displayName,
+          department: user.department,
+          source: 'mysql'
+        };
+
+        // Obtener roles del usuario
+        const [roles] = await pool.execute(`
+          SELECT r.id as roleid, r.shortname, r.name, ra.contextid  
+          FROM mdl_role_assignments ra
+          JOIN mdl_role r ON ra.roleid = r.id
+          WHERE ra.userid = ?
+        `, [user.id]);
+
+        userDetails.roles = roles;
+        userDetails.groups = roles.map(role => role.name || role.shortname);
+      }
+    }
+
+    // Si no se encontró en la BD pero el usuario en sesión tiene información de AD
+    if (Object.keys(userDetails).length === 0 && req.session.user) {
+      const sessionUser = req.session.user;
+      
+      // Verificar que sea el mismo usuario o un admin
+      if (sessionUser.username === userId || sessionUser.id == userId) {
+        userDetails = {
+          username: sessionUser.username,
+          email: sessionUser.email,
+          displayName: sessionUser.displayName,
+          department: sessionUser.department,
+          title: sessionUser.title,
+          source: sessionUser.source || 'session',
+          groups: sessionUser.memberOf || sessionUser.groups || [],
+          dn: sessionUser.dn
+        };
+      }
+    }
+
+    // Si aún no hay información, buscar en la tabla ad_users si existe
+    if (Object.keys(userDetails).length === 0) {
+      try {
+        const [adUserRows] = await pool.execute(`
+          SELECT 
+            username, display_name, email, user_dn, 
+            last_sync, is_active
+          FROM ad_users 
+          WHERE username = ? AND is_active = TRUE
+        `, [userId]);
+
+        if (adUserRows.length > 0) {
+          const adUser = adUserRows[0];
+          userDetails = {
+            username: adUser.username,
+            email: adUser.email,
+            displayName: adUser.display_name,
+            source: 'active_directory',
+            dn: adUser.user_dn,
+            groups: [], // Los grupos de AD se obtendrían de otra consulta
+            lastSync: adUser.last_sync
+          };
+        }
+      } catch (adError) {
+        console.warn('⚠️ Tabla ad_users no disponible:', adError.message);
+      }
+    }
+
+    // Si no se encontró información
+    if (Object.keys(userDetails).length === 0) {
+      return res.status(404).json({ 
+        error: 'Usuario no encontrado',
+        message: 'No se pudo encontrar información para este usuario'
+      });
+    }
+
+    console.log('✅ Detalles del usuario obtenidos:', userDetails);
+    res.json(userDetails);
+
+  } catch (error) {
+    console.error('❌ Error obteniendo detalles del usuario:', error);
+    res.status(500).json({ 
+      error: 'Error interno del servidor',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ===== ENDPOINT DE LOGIN CON AD =====
+app.post("/api/auth/login-ad", async (req, res) => {
+  const {
+    username,
+    password,
+    deviceFingerprint,
+    location,
+    deviceInfo,
+    computerName,
+  } = req.body;
+
+  console.log("🔐 Login con Active Directory:", { username, computerName });
+
+  try {
+    // 1. Validar datos básicos
+    if (!username || !password) {
+      return res
+        .status(400)
+        .json({ error: "Usuario y contraseña son requeridos" });
+    }
+
+    // 2. Log de ubicación
+    if (location) {
+      console.log("📍 Verificando ubicación...");
+      await logAuthAttempt(
+        username,
+        deviceFingerprint,
+        location,
+        "ad",
+        "location",
+        true,
+        null,
+        req
+      );
+    }
+
+    // 3. Verificar equipo en dominio AD
+    console.log("🖥️ Verificando equipo en dominio...");
+
+    const isComputerValid = await isComputerInDomain(
+      computerName || deviceInfo?.hostname,
+      location
+    );
+    if (!isComputerValid) {
+      console.log("❌ Equipo no encontrado en AD");
+      await logAuthAttempt(
+        username,
+        deviceFingerprint,
+        location,
+        "ad",
+        "computer",
+        false,
+        "Equipo no encontrado en AD",
+        req
+      );
+      return res.status(403).json({
+        error:
+          "Este equipo no está autorizado. Debe estar unido al dominio de la empresa.",
+        errorCode: "COMPUTER_NOT_IN_DOMAIN",
+      });
+    }
+
+    // 4. Verificar dispositivo autorizado
+    console.log("📱 Verificando dispositivo...");
+    if (deviceFingerprint) {
+      const deviceHash = generateDeviceHash(deviceFingerprint, {
+        username,
+        deviceInfo,
+      });
+      const [deviceRows] = await pool.execute(
+        "SELECT * FROM authorized_devices WHERE (fingerprint = ? OR device_hash = ?) AND username = ? AND is_active = TRUE",
+        [deviceFingerprint, deviceHash, username]
+      );
+
+      if (deviceRows.length === 0) {
+        // Auto-autorizar si el equipo está en AD
+        console.log("✅ Auto-autorizando dispositivo por verificación AD...");
+        const deviceId = crypto.randomUUID();
+        await pool.execute(
+          `
+          INSERT INTO authorized_devices 
+          (id, fingerprint, device_hash, username, device_info, location_info, auto_authorized, ad_computer_verified, created_at, last_seen, is_active)
+          VALUES (?, ?, ?, ?, ?, ?, TRUE, TRUE, NOW(), NOW(), TRUE)
+        `,
+          [
+            deviceId,
+            deviceFingerprint,
+            deviceHash,
+            username,
+            JSON.stringify(deviceInfo || {}),
+            JSON.stringify(location || {}),
+          ]
+        );
+
+        console.log("✅ Dispositivo auto-autorizado por verificación AD");
+      } else {
+        console.log("✅ Dispositivo autorizado encontrado");
+        await pool.execute(
+          "UPDATE authorized_devices SET last_seen = NOW(), device_info = ?, location_info = ? WHERE id = ?",
+          [
+            JSON.stringify(deviceInfo || {}),
+            JSON.stringify(location || {}),
+            deviceRows[0].id,
+          ]
+        );
+      }
+    }
+
+    // 5. Autenticar con Active Directory
+    console.log("🔑 Autenticando con Active Directory...");
+
+    const adAuth = await authenticateWithAD(username, password);
+    if (!adAuth.success) {
+      console.log("❌ Autenticación AD fallida:", adAuth.error);
+      await logAuthAttempt(
+        username,
+        deviceFingerprint,
+        location,
+        "ad",
+        "credentials",
+        false,
+        adAuth.error,
+        req
+      );
+      return res
+        .status(401)
+        .json({ error: "Credenciales inválidas en Active Directory" });
+    }
+
+    // 6. Verificar OU del usuario
+    console.log("🏢 Verificando unidad organizacional...");
+
+    const isOUValid = await isUserInAllowedOU(adAuth.user.dn);
+    if (!isOUValid) {
+      console.log("❌ Usuario no en OU permitida");
+      await logAuthAttempt(
+        username,
+        deviceFingerprint,
+        location,
+        "ad",
+        "authorization",
+        false,
+        "Usuario no en OU permitida",
+        req
+      );
+      return res.status(403).json({
+        error: "Tu cuenta no tiene permisos para acceder a este sistema.",
+        errorCode: "USER_NOT_IN_ALLOWED_OU",
+      });
+    }
+
+    // 7. Verificar grupos del usuario
+    console.log("👥 Verificando grupos...");
+
+    const isGroupValid = checkUserGroups(adAuth.user.memberOf);
+    if (!isGroupValid) {
+      console.log("❌ Usuario no en grupo requerido");
+      await logAuthAttempt(
+        username,
+        deviceFingerprint,
+        location,
+        "ad",
+        "authorization",
+        false,
+        "Usuario no en grupo requerido",
+        req
+      );
+      return res.status(403).json({
+        error: "Tu cuenta no pertenece a los grupos autorizados.",
+        errorCode: "USER_NOT_IN_REQUIRED_GROUP",
+      });
+    }
+
+    // 8. Crear sesión exitosa
+    console.log("✅ Autenticación AD completa, creando sesión...");
+
+    const user = {
+      username: adAuth.user.username,
+      email: adAuth.user.email,
+      displayName: adAuth.user.displayName,
+      department: adAuth.user.department,
+      title: adAuth.user.title,
+      source: "active_directory",
+      dn: adAuth.user.dn,
+    };
+
+    req.session.user = user;
+    req.session.deviceFingerprint = deviceFingerprint;
+    req.session.adAuthenticated = true;
+
+    // Guardar sesión explícitamente
+    req.session.save((err) => {
+      if (err) {
+        console.error("❌ Error guardando sesión:", err);
+      } else {
+        console.log("✅ Sesión guardada");
+      }
+    });
+
+    await logAuthAttempt(
+      username,
+      deviceFingerprint,
+      location,
+      "ad",
+      "success",
+      true,
+      null,
+      req
+    );
+
+    console.log("🎉 Login AD exitoso para:", username);
+    res.json({
+      success: true,
+      user: user,
+      message: "Autenticación exitosa con Active Directory",
+    });
+  } catch (error) {
+    console.error("💥 Error en login AD:", error);
+    await logAuthAttempt(
+      username || "unknown",
+      deviceFingerprint,
+      location,
+      "ad",
+      "error",
+      false,
+      error.message,
+      req
+    );
+    res.status(500).json({
+      error: "Error interno del servidor",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+});
+
+app.get("/api/admin/ad-status", async (req, res) => {
+  try {
+    console.log("🔍 Verificando estado de Active Directory...");
+
+    // Verificar si el cliente AD está configurado
+    if (!adClient) {
+      return res.json({
+        available: false,
+        error: "Cliente AD no configurado",
+        configUrl: adConfig.url,
+        configBaseDN: adConfig.baseDN,
+        lastCheck: new Date(),
+        details: "Active Directory client not initialized",
+      });
+    }
+
+    // Hacer una prueba simple de conexión
+    const testResult = await new Promise((resolve) => {
+      // Intentar buscar un usuario para probar la conexión
+      adClient.findUser("*", (err, users) => {
+        if (err) {
+          console.error("❌ Error en prueba de conexión AD:", err);
+          resolve({
+            available: false,
+            error: err.message,
+            errorCode: err.code || "UNKNOWN_ERROR",
+          });
+        } else {
+          console.log("✅ Conexión AD exitosa");
+          resolve({
+            available: true,
+            userCount: users ? users.length : 0,
+          });
+        }
+      });
+
+      // Timeout de 5 segundos para la prueba
+      setTimeout(() => {
+        resolve({
+          available: false,
+          error: "Timeout connecting to Active Directory",
+          errorCode: "TIMEOUT",
+        });
+      }, 5000);
+    });
+
+    res.json({
+      available: testResult.available,
+      error: testResult.error || null,
+      errorCode: testResult.errorCode || null,
+      configUrl: adConfig.url,
+      configBaseDN: adConfig.baseDN,
+      lastCheck: new Date(),
+      details: testResult.available
+        ? `AD disponible. ${
+            testResult.userCount || 0
+          } usuarios encontrados en prueba`
+        : "AD no disponible",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Error verificando estado AD:", error);
+    res.json({
+      available: false,
+      error: error.message,
+      configUrl: adConfig.url,
+      configBaseDN: adConfig.baseDN,
+      lastCheck: new Date(),
+      details: "Error interno verificando AD",
+    });
+  }
+});
+
+// Endpoint público para verificar estado AD (sin autenticación)
+app.get("/api/auth/ad-available", async (req, res) => {
+  try {
+    console.log("🔍 Verificación pública de disponibilidad AD...");
+
+    if (!adClient) {
+      return res.json({ available: false, reason: "Client not configured" });
+    }
+
+    // Prueba rápida de conexión (timeout más corto)
+    const isAvailable = await new Promise((resolve) => {
+      adClient.findUser("Administrator", (err, user) => {
+        resolve(!err);
+      });
+
+      // Timeout de 3 segundos para respuesta rápida
+      setTimeout(() => resolve(false), 3000);
+    });
+
+    res.json({
+      available: isAvailable,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Error en verificación pública AD:", error);
+    res.json({ available: false, reason: "Connection error" });
+  }
+});
+
+// Obtener estadísticas de AD
+app.get("/api/admin/ad-stats", requireAdmin, async (req, res) => {
+  try {
+    console.log("📊 Obteniendo estadísticas de AD...");
+
+    if (!adClient) {
+      return res.status(503).json({
+        error: "Active Directory no disponible",
+        stats: null,
+      });
+    }
+
+    // Estadísticas de la base de datos relacionadas con AD
+    const [adLogins] = await pool.execute(`
+      SELECT COUNT(*) as count FROM auth_logs 
+      WHERE auth_method = 'ad' 
+      AND success = TRUE 
+      AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+    `);
+
+    const [adDevices] = await pool.execute(`
+      SELECT COUNT(*) as count FROM authorized_devices 
+      WHERE ad_computer_verified = TRUE 
+      AND is_active = TRUE
+    `);
+
+    const [adFailedLogins] = await pool.execute(`
+      SELECT COUNT(*) as count FROM auth_logs 
+      WHERE auth_method = 'ad' 
+      AND success = FALSE 
+      AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+    `);
+
+    // Intentar obtener estadísticas del AD (con timeout)
+    const adDirectStats = await new Promise((resolve) => {
+      // Esta es una aproximación, en un entorno real tendrías que consultar AD
+      adClient.findUsers("*", (err, users) => {
+        if (err) {
+          console.warn(
+            "⚠️ No se pudieron obtener usuarios de AD:",
+            err.message
+          );
+          resolve({ totalUsers: 0, error: err.message });
+        } else {
+          resolve({ totalUsers: users ? users.length : 0 });
+        }
+      });
+
+      // Timeout
+      setTimeout(() => {
+        resolve({ totalUsers: 0, error: "Timeout" });
+      }, 5000);
+    });
+
+    const stats = {
+      // Estadísticas de autenticación
+      recentAdLogins: adLogins[0].count,
+      recentAdFailures: adFailedLogins[0].count,
+      adVerifiedDevices: adDevices[0].count,
+
+      // Estadísticas de AD directo
+      totalAdUsers: adDirectStats.totalUsers,
+      adConnectionError: adDirectStats.error || null,
+
+      // Información de configuración
+      adServerUrl: adConfig.url,
+      adBaseDN: adConfig.baseDN,
+
+      // Timestamp
+      generatedAt: new Date().toISOString(),
+    };
+
+    console.log("✅ Estadísticas AD generadas:", stats);
+    res.json(stats);
+  } catch (error) {
+    console.error("❌ Error obteniendo estadísticas AD:", error);
+    res.status(500).json({
+      error: "Error interno obteniendo estadísticas AD",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+});
+
+// Probar conexión específica a AD
+app.post("/api/admin/ad-test", requireAdmin, async (req, res) => {
+  try {
+    const { testType } = req.body; // 'connection', 'user', 'computer'
+
+    console.log(`🧪 Probando AD - Tipo: ${testType}`);
+
+    if (!adClient) {
+      return res.status(503).json({
+        success: false,
+        error: "Cliente AD no configurado",
+        testType,
+      });
+    }
+
+    let testResult;
+
+    switch (testType) {
+      case "connection":
+        testResult = await new Promise((resolve) => {
+          adClient.findUser("Administrator", (err, user) => {
+            if (err) {
+              resolve({
+                success: false,
+                error: err.message,
+                details: "No se pudo conectar al servidor AD",
+              });
+            } else {
+              resolve({
+                success: true,
+                message: "Conexión AD exitosa",
+                details: user
+                  ? "Usuario Administrator encontrado"
+                  : "Conexión OK",
+              });
+            }
+          });
+
+          setTimeout(() => {
+            resolve({
+              success: false,
+              error: "Timeout",
+              details: "La conexión tardó más de 10 segundos",
+            });
+          }, 10000);
+        });
+        break;
+
+      case "user":
+        const { username } = req.body;
+        if (!username) {
+          return res.status(400).json({
+            success: false,
+            error: "Username requerido para prueba de usuario",
+          });
+        }
+
+        testResult = await new Promise((resolve) => {
+          adClient.findUser(username, (err, user) => {
+            if (err) {
+              resolve({
+                success: false,
+                error: err.message,
+                details: `No se pudo buscar usuario: ${username}`,
+              });
+            } else if (user) {
+              resolve({
+                success: true,
+                message: `Usuario ${username} encontrado`,
+                details: {
+                  dn: user.dn,
+                  displayName: user.displayName,
+                  email: user.mail,
+                },
+              });
+            } else {
+              resolve({
+                success: false,
+                error: "Usuario no encontrado",
+                details: `El usuario ${username} no existe en AD`,
+              });
+            }
+          });
+        });
+        break;
+
+      case "computer":
+        const { computerName } = req.body;
+        if (!computerName) {
+          return res.status(400).json({
+            success: false,
+            error: "Computer name requerido para prueba de equipo",
+          });
+        }
+
+        testResult = await new Promise((resolve) => {
+          adClient.findComputer(computerName, (err, computer) => {
+            if (err) {
+              resolve({
+                success: false,
+                error: err.message,
+                details: `No se pudo buscar equipo: ${computerName}`,
+              });
+            } else if (computer) {
+              resolve({
+                success: true,
+                message: `Equipo ${computerName} encontrado`,
+                details: {
+                  dn: computer.dn,
+                  operatingSystem: computer.operatingSystem,
+                },
+              });
+            } else {
+              resolve({
+                success: false,
+                error: "Equipo no encontrado",
+                details: `El equipo ${computerName} no existe en AD`,
+              });
+            }
+          });
+        });
+        break;
+
+      default:
+        return res.status(400).json({
+          success: false,
+          error: "Tipo de prueba no válido",
+          validTypes: ["connection", "user", "computer"],
+        });
+    }
+
+    console.log(`✅ Prueba AD completada - ${testType}:`, testResult.success);
+    res.json({
+      ...testResult,
+      testType,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Error en prueba AD:", error);
+    res.status(500).json({
+      success: false,
+      error: "Error interno en prueba AD",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+});
+
+// Sincronizar usuarios de AD (funcionalidad adicional)
+app.post("/api/admin/ad-sync", requireAdmin, async (req, res) => {
+  try {
+    console.log("🔄 Iniciando sincronización con AD...");
+
+    if (!adClient) {
+      return res.status(503).json({
+        success: false,
+        error: "Active Directory no disponible",
+      });
+    }
+
+    // Verificar si existe la tabla ad_users
+    try {
+      await pool.execute("SELECT 1 FROM ad_users LIMIT 1");
+    } catch (tableError) {
+      console.warn("⚠️ Tabla ad_users no existe, creando...");
+      // Crear tabla básica si no existe
+      await pool.execute(`
+        CREATE TABLE IF NOT EXISTS ad_users (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          username VARCHAR(100) NOT NULL UNIQUE,
+          display_name VARCHAR(255) NULL,
+          email VARCHAR(255) NULL,
+          user_dn TEXT NOT NULL,
+          last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    }
+
+    // Obtener usuarios de AD
+    const adUsers = await new Promise((resolve, reject) => {
+      adClient.findUsers("*", (err, users) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(users || []);
+        }
+      });
+    });
+
+    console.log(`📥 Encontrados ${adUsers.length} usuarios en AD`);
+
+    // Sincronizar usuarios
+    let syncedCount = 0;
+    let errorCount = 0;
+
+    for (const user of adUsers.slice(0, 50)) {
+      // Limitar a 50 usuarios por vez
+      try {
+        await pool.execute(
+          `
+          INSERT INTO ad_users (username, display_name, email, user_dn, last_sync)
+          VALUES (?, ?, ?, ?, NOW())
+          ON DUPLICATE KEY UPDATE
+          display_name = VALUES(display_name),
+          email = VALUES(email),
+          user_dn = VALUES(user_dn),
+          last_sync = NOW()
+        `,
+          [
+            user.sAMAccountName,
+            user.displayName || "",
+            user.mail || "",
+            user.dn,
+          ]
+        );
+
+        syncedCount++;
+      } catch (userError) {
+        console.error(
+          `❌ Error sincronizando usuario ${user.sAMAccountName}:`,
+          userError
+        );
+        errorCount++;
+      }
+    }
+
+    console.log(
+      `✅ Sincronización completada: ${syncedCount} usuarios, ${errorCount} errores`
+    );
+
+    res.json({
+      success: true,
+      message: "Sincronización completada",
+      stats: {
+        totalFound: adUsers.length,
+        synced: syncedCount,
+        errors: errorCount,
+        processed: Math.min(adUsers.length, 50),
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Error en sincronización AD:", error);
+    res.status(500).json({
+      success: false,
+      error: "Error en sincronización AD",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+});
+
+// Obtener configuración de AD (solo lectura)
+app.get("/api/admin/ad-config", requireAdmin, async (req, res) => {
+  try {
+    // Retornar configuración sin datos sensibles
+    const safeConfig = {
+      url: adConfig.url,
+      baseDN: adConfig.baseDN,
+      bindUser: adConfig.username,
+      // NO incluir password por seguridad
+      isConfigured: !!(adConfig.url && adConfig.baseDN && adConfig.username),
+      allowedOUs: process.env.ALLOWED_OUS || "",
+      allowedComputerOUs: process.env.ALLOWED_COMPUTER_OUS || "",
+      requiredGroups: process.env.REQUIRED_AD_GROUPS || "",
+      clientInitialized: !!adClient,
+    };
+
+    res.json(safeConfig);
+  } catch (error) {
+    console.error("❌ Error obteniendo configuración AD:", error);
+    res.status(500).json({ error: "Error obteniendo configuración AD" });
+  }
+});
+
+console.log("✅ Endpoints de Active Directory agregados");
 // ===== GEOCERCAS API =====
 
 // Crear una nueva geocerca

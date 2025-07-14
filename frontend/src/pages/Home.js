@@ -1,14 +1,97 @@
-// src/pages/Home.js
-import React from "react";
+// src/pages/Home.js - Actualizado con información de AD
+import React, { useState, useEffect } from "react";
 import { useAuthContext } from "../context/AuthContext";
 import { useDeviceFingerprint } from "../hooks/useDeviceFingerprint";
-import { useNavigate } from "react-router-dom"; // Agregar esta importación
+import { useNavigate } from "react-router-dom";
 import "../styles/Home.css";
 
 const Home = () => {
   const { user, logout } = useAuthContext();
   const { fingerprint, deviceInfo } = useDeviceFingerprint();
-  const navigate = useNavigate(); // Agregar esta línea
+  const navigate = useNavigate();
+  
+  // Estados para información adicional del usuario
+  const [userDetails, setUserDetails] = useState({
+    email: user?.email || '',
+    displayName: user?.displayName || '',
+    groups: [],
+    department: user?.department || '',
+    title: user?.title || '',
+    source: user?.source || 'mysql'
+  });
+  const [loadingUserInfo, setLoadingUserInfo] = useState(false);
+
+  // Cargar información adicional del usuario al montar el componente
+  useEffect(() => {
+    if (user && user.username) {
+      loadUserDetails();
+    }
+  }, [user]);
+
+  const loadUserDetails = async () => {
+    if (!user || !user.username) return;
+
+    setLoadingUserInfo(true);
+    try {
+      console.log('🔍 Cargando detalles del usuario:', user.username);
+      
+      // Intentar obtener información del usuario desde el backend
+      const response = await fetch(`/api/users/${user.id || user.username}/with-roles`, {
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      if (response.ok) {
+        const userData = await response.json();
+        console.log('📊 Datos del usuario obtenidos:', userData);
+        
+        // Actualizar estado con la información obtenida
+        setUserDetails(prevDetails => ({
+          ...prevDetails,
+          email: userData.email || user.email || prevDetails.email,
+          displayName: userData.displayName || user.displayName || prevDetails.displayName,
+          groups: userData.groups || [],
+          department: userData.department || user.department || prevDetails.department,
+          title: userData.title || user.title || prevDetails.title,
+          source: userData.source || user.source || prevDetails.source
+        }));
+      } else {
+        console.warn('⚠️ No se pudo obtener información adicional del usuario');
+        
+        // Usar información del contexto si está disponible
+        if (user.memberOf || user.groups) {
+          setUserDetails(prevDetails => ({
+            ...prevDetails,
+            groups: user.memberOf || user.groups || [],
+            email: user.email || prevDetails.email,
+            displayName: user.displayName || prevDetails.displayName,
+            department: user.department || prevDetails.department,
+            title: user.title || prevDetails.title,
+            source: user.source || prevDetails.source
+          }));
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error cargando detalles del usuario:', error);
+      
+      // En caso de error, usar la información disponible en el contexto
+      if (user.memberOf || user.groups) {
+        setUserDetails(prevDetails => ({
+          ...prevDetails,
+          groups: user.memberOf || user.groups || [],
+          email: user.email || prevDetails.email,
+          displayName: user.displayName || prevDetails.displayName,
+          department: user.department || prevDetails.department,
+          title: user.title || prevDetails.title,
+          source: user.source || prevDetails.source
+        }));
+      }
+    } finally {
+      setLoadingUserInfo(false);
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -46,6 +129,48 @@ const Home = () => {
     window.location.href = redirectUrl.toString();
   };
 
+  // Función para formatear grupos de AD
+  const formatADGroups = (groups) => {
+    if (!groups || !Array.isArray(groups)) return [];
+    
+    return groups.map(group => {
+      // Si el grupo viene en formato DN (Distinguished Name)
+      if (typeof group === 'string' && group.includes('CN=')) {
+        const match = group.match(/CN=([^,]+)/i);
+        return match ? match[1].trim() : group;
+      }
+      return group;
+    }).filter(group => group && group.length > 0);
+  };
+
+  // Función para obtener el ícono según el método de autenticación
+  const getAuthSourceIcon = (source) => {
+    switch (source) {
+      case 'active_directory':
+      case 'ad':
+        return '🏢';
+      case 'mysql':
+        return '🔑';
+      default:
+        return '👤';
+    }
+  };
+
+  // Función para obtener el nombre del método de autenticación
+  const getAuthSourceName = (source) => {
+    switch (source) {
+      case 'active_directory':
+      case 'ad':
+        return 'Active Directory';
+      case 'mysql':
+        return 'Base de Datos';
+      default:
+        return 'Sistema Local';
+    }
+  };
+
+  const formattedGroups = formatADGroups(userDetails.groups);
+
   return (
     <div className="home-container">
       {/* Header */}
@@ -79,7 +204,7 @@ const Home = () => {
             <span className="welcome-text">
               Bienvenido,{" "}
               <strong className="welcome-name">
-                {user?.displayName || user?.username}
+                {userDetails.displayName || user?.displayName || user?.username}
               </strong>
             </span>
             <button onClick={handleLogout} className="logout-btn">
@@ -113,6 +238,11 @@ const Home = () => {
                   </svg>
                 </div>
                 <h2 className="card-title">Información de la Sesión</h2>
+                {loadingUserInfo && (
+                  <div className="loading-indicator">
+                    <div className="spinner-small"></div>
+                  </div>
+                )}
               </div>
 
               <div className="user-info-grid">
@@ -125,8 +255,16 @@ const Home = () => {
                   <div className="info-item" style={{ marginTop: "1rem" }}>
                     <label className="info-label">Email</label>
                     <p className="info-value">
-                      {user?.email || "No disponible"}
+                      {userDetails.email || "No disponible"}
                     </p>
+                  </div>
+
+                  <div className="info-item" style={{ marginTop: "1rem" }}>
+                    <label className="info-label">Método de Autenticación</label>
+                    <div className="auth-source-info">
+                      <span className="auth-icon">{getAuthSourceIcon(userDetails.source)}</span>
+                      <span className="auth-name">{getAuthSourceName(userDetails.source)}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -134,23 +272,41 @@ const Home = () => {
                   <div className="info-item">
                     <label className="info-label">Nombre Completo</label>
                     <p className="info-value">
-                      {user?.displayName || "No disponible"}
+                      {userDetails.displayName || "No disponible"}
                     </p>
                   </div>
 
+                  {userDetails.department && (
+                    <div className="info-item" style={{ marginTop: "1rem" }}>
+                      <label className="info-label">Departamento</label>
+                      <p className="info-value">{userDetails.department}</p>
+                    </div>
+                  )}
+
+                  {userDetails.title && (
+                    <div className="info-item" style={{ marginTop: "1rem" }}>
+                      <label className="info-label">Cargo</label>
+                      <p className="info-value">{userDetails.title}</p>
+                    </div>
+                  )}
+
                   <div className="info-item" style={{ marginTop: "1rem" }}>
-                    <label className="info-label">Grupos AD</label>
+                    <label className="info-label">
+                      {userDetails.source === 'active_directory' || userDetails.source === 'ad' 
+                        ? 'Grupos de Active Directory' 
+                        : 'Roles del Sistema'}
+                    </label>
                     <div className="groups-container">
-                      {user?.groups && user.groups.length > 0 ? (
+                      {formattedGroups && formattedGroups.length > 0 ? (
                         <>
-                          {user.groups.slice(0, 3).map((group, index) => (
+                          {formattedGroups.slice(0, 3).map((group, index) => (
                             <span key={index} className="group-tag">
-                              {group.split(",")[0].replace("CN=", "")}
+                              {group}
                             </span>
                           ))}
-                          {user.groups.length > 3 && (
+                          {formattedGroups.length > 3 && (
                             <span className="group-tag more">
-                              +{user.groups.length - 3} más
+                              +{formattedGroups.length - 3} más
                             </span>
                           )}
                         </>
@@ -159,13 +315,41 @@ const Home = () => {
                           className="info-value"
                           style={{ fontSize: "0.875rem", color: "#6b7280" }}
                         >
-                          No disponible
+                          {loadingUserInfo ? "Cargando..." : "No disponible"}
                         </p>
                       )}
                     </div>
                   </div>
                 </div>
               </div>
+
+              {/* Información adicional de debug en desarrollo */}
+              {process.env.NODE_ENV === 'development' && (
+                <div className="debug-info-user" style={{
+                  marginTop: "1rem",
+                  padding: "0.75rem",
+                  backgroundColor: "#f8f9fa",
+                  borderRadius: "0.375rem",
+                  fontSize: "0.75rem",
+                  fontFamily: "monospace"
+                }}>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontWeight: "bold" }}>
+                      🔍 Debug Info (Desarrollo)
+                    </summary>
+                    <div style={{ marginTop: "0.5rem" }}>
+                      <strong>Usuario completo:</strong>
+                      <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.7rem" }}>
+                        {JSON.stringify(user, null, 2)}
+                      </pre>
+                      <strong>Detalles cargados:</strong>
+                      <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.7rem" }}>
+                        {JSON.stringify(userDetails, null, 2)}
+                      </pre>
+                    </div>
+                  </details>
+                </div>
+              )}
             </div>
 
             {/* Área de Trabajo */}
@@ -211,10 +395,15 @@ const Home = () => {
                 <h3 className="work-title">¡Acceso Autorizado!</h3>
                 <p className="work-description">
                   Tu dispositivo y ubicación han sido verificados exitosamente.
-                  El sistema de seguridad multi-factor ha validado tu identidad.
+                  {userDetails.source === 'active_directory' || userDetails.source === 'ad' 
+                    ? ' Tu cuenta de Active Directory ha sido autenticada y verificada.'
+                    : ' El sistema de seguridad multi-factor ha validado tu identidad.'
+                  }
                 </p>
                 <div className="action-buttons">
-                  <button className="access-btn" onClick={handleAccessMoodle}>Acceder al Sistema</button>
+                  <button className="access-btn" onClick={handleAccessMoodle}>
+                    Acceder al Sistema
+                  </button>
                   <button
                     className="config-btn"
                     onClick={() => navigate("/admin")}
@@ -263,9 +452,23 @@ const Home = () => {
                 </div>
                 <div className="security-item">
                   <div className="security-dot"></div>
-                  <span className="security-emoji">🔐</span>
-                  <span className="security-text">Credenciales válidas</span>
+                  <span className="security-emoji">
+                    {getAuthSourceIcon(userDetails.source)}
+                  </span>
+                  <span className="security-text">
+                    {userDetails.source === 'active_directory' || userDetails.source === 'ad' 
+                      ? 'Active Directory verificado'
+                      : 'Credenciales válidas'
+                    }
+                  </span>
                 </div>
+                {(userDetails.source === 'active_directory' || userDetails.source === 'ad') && formattedGroups.length > 0 && (
+                  <div className="security-item">
+                    <div className="security-dot"></div>
+                    <span className="security-emoji">👥</span>
+                    <span className="security-text">Grupos AD autorizados</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -356,8 +559,10 @@ const Home = () => {
               </div>
               <p className="help-text">
                 Este sistema utiliza verificación de ubicación, identificación
-                de dispositivo y autenticación de Active Directory para
-                garantizar la máxima seguridad de acceso.
+                de dispositivo{userDetails.source === 'active_directory' || userDetails.source === 'ad' 
+                  ? ', autenticación de Active Directory y verificación de grupos'
+                  : ' y autenticación de base de datos'
+                } para garantizar la máxima seguridad de acceso.
               </p>
             </div>
           </div>
